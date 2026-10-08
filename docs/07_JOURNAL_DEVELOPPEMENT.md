@@ -45,6 +45,13 @@
 - **Validation du propriétaire :** en attente.
 - **Prochaine brique :** 001, après validation.
 
+## 2026-10-09 — Brique 000 : clôture (nettoyage du dépôt)
+
+- **Suppression de `MOrganiser_Kit_Demarrage_v0.1.zip`** (validée par le propriétaire) : ses 17 fichiers ont été comparés un à un à leur version suivie par Git (commit `96fe340`) ; ils sont tous présents et identiques.
+- **`.gitignore` corrigé** : les règles de dossier (`data`, `build`, `dist`, `target`, `private`, `backups`…) sont ancrées à la racine ou à un chemin précis, pour ne plus masquer un dossier de code du même nom ; `*secret*` est remplacé par `*.secret`, `*secret*.json`, `*secret*.txt` et `/secrets/`. Les règles par extension (bases SQLite, sauvegardes, clés, `.env`, exécutables) restent globales ; les règles `bin/` et `obj/` (.NET, sans usage) sont retirées.
+- **Vérifié avec `git check-ignore`** : 10 chemins de code plausibles ne sont pas ignorés (ex. `src-tauri/src/data/mod.rs`) ; 18 chemins sensibles ou générés le sont ; la liste des fichiers ignorés du dépôt est inchangée ; aucun fichier suivi n'est devenu ignoré.
+- **Aucune modification fonctionnelle.**
+
 ## Modèle à recopier après chaque brique
 
 ### AAAA-MM-JJ — Brique XXX : [nom]

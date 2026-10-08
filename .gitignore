@@ -1,3 +1,7 @@
+# Règle de rédaction : une règle de DOSSIER est ancrée à la racine (« /nom/ ») ou à un
+# chemin précis, pour ne jamais masquer un dossier de code source du même nom
+# (ex. src-tauri/src/data/). Les règles par EXTENSION restent globales.
+
 # Secrets, variables privées
 .env
 .env.*
@@ -6,9 +10,12 @@
 *.pem
 *.p12
 *.pfx
-*secret*
+*.secret
+*secret*.json
+*secret*.txt
+/secrets/
 
-# Bases et données personnelles (y compris journaux SQLite)
+# Bases et données personnelles (y compris journaux SQLite), où qu'elles soient
 *.db
 *.db-*
 *.sqlite
@@ -17,39 +24,35 @@
 *.bak
 *.backup
 *.zip.enc
-userdata/
-user-data/
-private/
-secrets/
-backups/
-sauvegardes/
 
-# Fichiers personnels et pièces jointes locales
-data/
-documents-personnels/
+# Dossiers de données personnelles éventuellement posés à la racine du dépôt
+# (les vraies données vivent dans %LOCALAPPDATA%, hors du dépôt)
+/data/
+/userdata/
+/user-data/
+/private/
+/backups/
+/sauvegardes/
+/documents-personnels/
 
-# Artifacts de construction courants
+# Dépendances et fichiers générés
 node_modules/
-dist/
-build/
-release/
-coverage/
-bin/
-obj/
-.vs/
+/dist/
+/build/
+/release/
+/coverage/
+/src-tauri/target/
+/src-tauri/gen/
 *.log
 
-# Rust / Tauri (compilation et schémas générés)
-target/
-src-tauri/gen/
-
-# Installeurs téléchargés (ne jamais versionner d'exécutables)
+# Installeurs et exécutables (ne jamais versionner de binaires)
 *.exe
 *.msi
 
 # Environnements locaux et fichiers éditeur
 .venv/
 __pycache__/
+.vs/
 .DS_Store
 Thumbs.db
 .vscode/*.local.json
