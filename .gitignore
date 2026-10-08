@@ -39,6 +39,14 @@ obj/
 .vs/
 *.log
 
+# Rust / Tauri (compilation et schémas générés)
+target/
+src-tauri/gen/
+
+# Installeurs téléchargés (ne jamais versionner d'exécutables)
+*.exe
+*.msi
+
 # Environnements locaux et fichiers éditeur
 .venv/
 __pycache__/
