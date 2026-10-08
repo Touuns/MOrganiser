@@ -1,0 +1,47 @@
+# Secrets, variables privées
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*secret*
+
+# Bases et données personnelles (y compris journaux SQLite)
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.bak
+*.backup
+*.zip.enc
+userdata/
+user-data/
+private/
+secrets/
+backups/
+sauvegardes/
+
+# Fichiers personnels et pièces jointes locales
+data/
+documents-personnels/
+
+# Artifacts de construction courants
+node_modules/
+dist/
+build/
+release/
+coverage/
+bin/
+obj/
+.vs/
+*.log
+
+# Environnements locaux et fichiers éditeur
+.venv/
+__pycache__/
+.DS_Store
+Thumbs.db
+.vscode/*.local.json
