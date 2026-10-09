@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Icône provisoire de M'Organiser (brique 000). À remplacer par l'identité définitive. -->
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="#1F2A37"/>
+  <path d="M272 736V304l240 260 240-260v432" fill="none" stroke="#5EC2B7" stroke-width="88" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

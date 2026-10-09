@@ -2,7 +2,7 @@
 
 **Méthode : construire, tester, comprendre, documenter, valider, puis seulement passer à la brique suivante.** Les numéros identifient les capacités, non les dates ni des livraisons garanties.
 
-## Étape 0 — Fondations (à lancer en premier)
+## Étape 0 — Fondations (implémentée le 2026-10-08, validation du propriétaire en attente — voir `docs/briques/BRIQUE_000_FONDATIONS.md`)
 
 - Valider la pile technologique et ses compromis.
 - Créer squelette exécutable Windows, fenêtre de base, environnement de test, conventions et stratégie de stockage local.

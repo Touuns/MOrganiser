@@ -1,6 +1,22 @@
-# 03 — Architecture : principes, pas encore choix technologique
+# 03 — Architecture
 
-**Statut : architecture conceptuelle.** La pile de développement Windows reste à choisir avant toute programmation.
+**Statut : pile technique actée le 2026-10-08 (voir `09_DECISIONS_OUVERTES.md`) ; fondations en place (brique 000).**
+
+## Pile technique
+
+| Couche | Technologie | Emplacement |
+|---|---|---|
+| Interface | React 19 + TypeScript, Vite | `src/` |
+| Styles | CSS natif + jetons de design (variables CSS) | `src/styles/` |
+| Système, métier, persistance | Rust, Tauri 2 | `src-tauri/src/` |
+| Base locale (dès la brique 001) | SQLite, accédée uniquement depuis Rust | `%LOCALAPPDATA%\<identifiant>\data` |
+| Tests | Vitest + Testing Library (interface), `cargo test` (Rust) | `pnpm test` |
+
+Communication : l'interface appelle des **commandes Rust** nommées (`invoke("…")`) regroupées dans `src-tauri/src/commands.rs`, et passe par un module unique côté TypeScript (`src/lib/`). L'interface n'accède jamais directement aux fichiers ni à la base.
+
+Sécurité de la fenêtre : politique de sécurité du contenu (CSP) stricte dans `tauri.conf.json` (aucune ressource externe, aucun appel réseau). Les commandes Rust sont déclarées dans `build.rs` et autorisées une par une dans `capabilities/default.json` ; aucune permission système. Politique complète : `04_SECURITE.md`, section « Commandes Rust et permissions ».
+
+Environnements : voir `docs/briques/BRIQUE_000_FONDATIONS.md` (identifiants, dossiers, garde-fous Dev/Stable).
 
 ## Séparation indispensable
 
@@ -40,8 +56,6 @@ Ces entités sont une **carte conceptuelle**, pas un ordre de créer dix tables 
 - Les mises à jour complètes suffisent au départ ; les patchs différentiels ne sont pas nécessaires pour une petite application.
 - Aucune publication automatique de données, clés ou logs sensibles.
 
-## Choix de technologie à examiner
+## Choix de technologie
 
-Critères : bon support Windows **tray, démarrage automatique, instance unique**, interface moderne, performance en arrière-plan, SQLite locale, expérience d'animation, maintenabilité avec Claude/VS Code, packaging, mises à jour et future interface mobile.
-
-À comparer de manière concise avant de coder : **.NET (WPF/WinUI 3)** versus **Tauri + interface web moderne** (Electron comme alternative si une contrainte forte le justifie). Consigner la décision, ses avantages et ses coûts ; ne pas commencer plusieurs versions concurrentes.
+Tranché le 2026-10-08 en faveur de Tauri 2 + React + TypeScript (comparaison, avantages et coûts consignés dans `09_DECISIONS_OUVERTES.md`). Ne pas commencer de version concurrente.

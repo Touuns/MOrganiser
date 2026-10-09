@@ -1,8 +1,21 @@
 # M'Organiser
 
-**Statut : cadrage initial — aucun code applicatif encore créé.**  
+**Statut : fondations techniques posées (brique 000) — aucune fonctionnalité utilisateur encore.**  
 **Plateforme cible : Windows, en premier.**  
+**Pile : Tauri 2 + React + TypeScript + Rust.**  
 **Méthode : une brique fonctionnelle à la fois.**
+
+## Lancer l'application (Dev)
+
+Prérequis : Node.js 24, pnpm 10, Rust (chaîne MSVC), Visual Studio Build Tools (C++), WebView2.
+
+```powershell
+pnpm install      # une seule fois
+pnpm app:dev      # ouvre la fenêtre « M'Organiser — DEV »
+pnpm test         # tous les tests (interface + Rust)
+```
+
+La première compilation Rust prend quelques minutes. Les données Dev sont dans `%LOCALAPPDATA%\com.morganiser.desktop.dev\data`, jamais dans celles de Stable. Détails : `docs/briques/BRIQUE_000_FONDATIONS.md`.
 
 M'Organiser est un centre de contrôle personnel : il doit aider à capturer, organiser, exécuter et suivre les responsabilités personnelles et externes, les projets, les objets, les finances et, plus tard, les loisirs.
 
@@ -26,6 +39,7 @@ M'Organiser est un centre de contrôle personnel : il doit aider à capturer, or
 - `docs/07_JOURNAL_DEVELOPPEMENT.md` : journal chronologique.
 - `docs/08_COLLABORATION.md` : règles de Claude, Codex et revue humaine.
 - `docs/09_DECISIONS_OUVERTES.md` : décisions actées et sujets à arbitrer.
+- `docs/briques/BRIQUE_000_FONDATIONS.md` : fondations techniques (structure, Dev/Stable, commandes).
 - `docs/briques/BRIQUE_001_CAPTURE_RAPIDE.md` : spécification de la première fonctionnalité.
 
-Ce dépôt ne contient pour l'instant que le dossier de préparation. **Ne pas présenter une maquette ou un exemple comme une fonctionnalité déjà implémentée.**
+**Ne pas présenter une maquette ou un exemple comme une fonctionnalité déjà implémentée.**
