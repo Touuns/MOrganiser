@@ -12,6 +12,12 @@ const APP_COMMANDS: &[&str] = &[
     "update_inbox_item",
     "trash_inbox_item",
     "restore_inbox_item",
+    "convert_inbox_item_to_task",
+    "cancel_task_conversion",
+    "suggest_task_title",
+    "list_tasks",
+    "get_task",
+    "list_converted_items",
 ];
 
 fn main() {

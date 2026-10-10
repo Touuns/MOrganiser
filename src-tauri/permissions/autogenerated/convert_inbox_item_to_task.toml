@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-convert-inbox-item-to-task"
+description = "Enables the convert_inbox_item_to_task command without any pre-configured scope."
+commands.allow = ["convert_inbox_item_to_task"]
+
+[[permission]]
+identifier = "deny-convert-inbox-item-to-task"
+description = "Denies the convert_inbox_item_to_task command without any pre-configured scope."
+commands.deny = ["convert_inbox_item_to_task"]

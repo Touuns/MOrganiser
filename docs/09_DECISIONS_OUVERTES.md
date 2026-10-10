@@ -4,7 +4,7 @@
 
 - Application Windows d'abord ; au lancement Windows : fenêtre compacte visible, non épinglée.
 - `×` masque vers le tray, `—` minimise, `Quitter` via tray arrête réellement.
-- Tableau de bord développé : tâches personnelles et externes distinctes et visibles ; capture directement visible avec boîte « À organiser » adjacente quand l'espace le permet.
+- Tableau de bord développé : tâches personnelles et externes distinctes et visibles ; capture directement visible avec boîte « À organiser » **au-dessus** du champ de capture (décision du 2026-10-10, remplace « adjacente »).
 - La capture est une **entrée brute**, non automatiquement classée en tâche.
 - Sobriété visuelle « centre de contrôle », données opérationnelles devant les gros indicateurs.
 - Hiérarchie de sous-tâches et prochaine action visible par défaut ; tris configurables.
@@ -41,12 +41,27 @@
 ### 2026-10-10 — Sous-brique 001-B (validées par le propriétaire)
 
 - **Fiche :** panneau latéral à droite à partir de 900 px (ajustable après essais), remplacement de la vue principale en dessous ; fiche directement éditable.
-- **Corbeille :** suppression logique **sans confirmation systématique**, notification « Annuler » d'environ 8 s, vue Corbeille permanente (survit au redémarrage) ; **aucune suppression définitive ni vidage automatique** en 001-B.
+- **Corbeille :** suppression logique **sans confirmation systématique**, notification « Annuler » (8 s en 001-B, **4 s depuis 001-C**), vue Corbeille permanente (survit au redémarrage) ; **aucune suppression définitive ni vidage automatique** en 001-B.
 - **Conflits :** verrouillage optimiste (`updated_at` attendu) vérifié atomiquement dans le `UPDATE`, `updated_at` strictement croissant, erreurs distinctes (introuvable / corbeille / conflit). Sans migration.
 - **« Voir tout » :** lots de 50, pagination par curseur `(date, id)`, plus anciennes ajoutées au-dessus.
 - **Choix d'implémentation à relire :** la mise à la corbeille et la restauration ne modifient pas `updated_at` (dernière modification du contenu) ; voir la fiche brique 001, section 12, pour l'impact sur la future synchronisation.
 
-## À arbitrer avant le développement de la brique 001
+### 2026-10-10 — Brique 001 clôturée
+
+- 001-A à 001-E validées et fusionnées (PR #2 à #6). 001-D : option manuelle « Conserver ce choix » (suggestion automatique abandonnée). 001-E : initiation minimale, proposition unique à la première utilisation (mémoire `localStorage`, `morganiser.initiation.v1`), bouton « Découvrir » permanent ; reprise et parcours thématiques reportés en brique 007.
+
+### 2026-10-10 — Brique 002 : conversion d'une capture en tâche (validées par le propriétaire)
+
+- **Périmètre :** conversion en **tâche** uniquement ; notes et projets attendent leurs modules.
+- **Tâche minimale :** identifiant stable, titre (≤ 120 caractères, extrait modifiable de la première ligne), détails (copie intégrale), statut initial « à faire », destination facultative copiée telle quelle, capture d'origine, horodatages. Les cinq statuts du cahier des charges sont admis par le schéma ; 002 n'écrit que « à faire ».
+- **Origine :** capture conservée intégralement, retirée de « À organiser », retrouvable dans « Traitées » et depuis la tâche ; lecture seule tant qu'elle est convertie.
+- **Annulation :** « Annuler » 4 s ; refusée si la tâche a été modifiée ou avancée. Tâche annulée conservée (`deleted_at`), jamais supprimée. Reconversion possible.
+- **Dates :** la conversion ne modifie pas `updated_at` de la capture ; `converted_at` porte le changement de cycle de vie.
+- **Garde SQL :** tout changement d'un champ métier d'une tâche doit faire croître strictement `updated_at` (déclencheur).
+- **Migrations :** sauvegarde cohérente (`VACUUM INTO`) vérifiée avant toute migration d'une base existante ; échec de sauvegarde = pas de migration ; trois sauvegardes conservées. Aucune migration de Stable ; la base Dev réelle n'est migrée qu'après un essai sur copie isolée, organisé séparément.
+- **Reste ouvert :** stratégie de sauvegarde/restauration **utilisateur** (copie planifiée, export) avant toute donnée réelle dans Stable.
+
+## Arbitrages d'avant la brique 001 (clos, sauf la sauvegarde de Stable)
 
 1. ~~Pile technologique Windows~~ → actée le 2026-10-08 (voir ci-dessus).
 2. **Emplacement technique des données** : appliqué en Dev ; la **stratégie de sauvegarde/restauration** reste ouverte et doit être décidée **avant toute utilisation de Stable avec des données réelles**.
