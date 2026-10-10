@@ -36,6 +36,8 @@ interface InboxPanelProps {
   onOpen: (item: InboxItem) => void;
   onShowAll: () => void;
   onShowTrash: () => void;
+  /** Capture à mettre en évidence pendant la visite d'initiation. */
+  highlightId?: string | null;
 }
 
 export function filterToValue(filter: InboxFilter): string {
@@ -210,6 +212,7 @@ export function InboxPanel(props: InboxPanelProps) {
                 }
                 selected={item.id === props.selectedId}
                 onOpen={props.onOpen}
+                initiationTarget={item.id === props.highlightId}
               />
             ))}
           </ol>

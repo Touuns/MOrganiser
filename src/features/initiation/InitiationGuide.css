@@ -1,0 +1,88 @@
+/*
+ * Visite d'initiation : mise en évidence des VRAIS composants, sans voile ni blocage.
+ * Rien ne change de taille ni de place : un contour intérieur et une teinte seulement.
+ * `prefers-reduced-motion` met les durées à 0 (jetons), donc le changement est immédiat.
+ */
+.inbox-home[data-initiation="capture"] .capture,
+.inbox-home[data-initiation="box"] .inbox {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+  transition: outline-color var(--duration-base) var(--ease-out);
+}
+
+.inbox-home[data-initiation="box"] .inbox__item[data-initiation-target] {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+/*
+ * La carte flotte sous l'en-tête de la vue (sa position est mesurée). Tant qu'elle est
+ * affichée, la liste réserve en haut la place qu'elle occupe : une courte liste (la capture
+ * créée en tête) n'est jamais recouverte. Cette réserve est identique aux étapes « capture »
+ * et « boîte » et présente avant toute capture : la liste ne bouge donc pas à l'arrivée.
+ */
+.inbox-home[data-guide] .inbox__list {
+  padding-top: calc(var(--space-2) + var(--initiation-reserve, 5rem));
+}
+
+/* Région vivante : hors du flux, jamais sur le champ de capture. */
+.initiation-region {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  left: var(--space-2);
+  z-index: 15;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+/* Message et boutons sur une seule ligne quand la largeur le permet (sinon, deux lignes). */
+.initiation-card {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-3);
+  width: min(100%, 40rem);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.28);
+  font-size: var(--text-sm);
+  pointer-events: auto;
+}
+
+.initiation-card__message {
+  flex: 1 1 auto;
+  font-weight: var(--weight-semibold);
+}
+
+.initiation-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.initiation-card button {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.initiation-card button.initiation-card__primary {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+  font-weight: var(--weight-semibold);
+}
+
+.initiation-card button:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}

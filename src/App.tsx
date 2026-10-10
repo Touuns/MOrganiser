@@ -3,6 +3,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { Badge } from "./components/Badge";
 import { Panel } from "./components/Panel";
 import { InboxHome } from "./features/inbox/InboxHome";
+import { useInitiation } from "./features/initiation/useInitiation";
 import { fetchAppInfo, type AppInfo } from "./lib/appInfo";
 import "./App.css";
 
@@ -17,6 +18,9 @@ type InfoState =
  */
 export function App() {
   const [state, setState] = useState<InfoState>({ status: "loading" });
+  const inApp = isTauri();
+  // Initiation facultative : proposée une seule fois, rejouable à tout moment par « Découvrir ».
+  const initiation = useInitiation(inApp);
 
   useEffect(() => {
     let active = true;
@@ -35,11 +39,16 @@ export function App() {
       <header className="app__header">
         <span className="app__name">M'Organiser</span>
         <EnvironmentBadge state={state} />
+        {inApp && (
+          <button type="button" className="app__discover" onClick={initiation.start}>
+            Découvrir
+          </button>
+        )}
       </header>
 
       <main className="app__main">
-        {isTauri() ? (
-          <InboxHome />
+        {inApp ? (
+          <InboxHome initiation={initiation} />
         ) : (
           <Panel title="Aperçu navigateur">
             <p className="app__muted">

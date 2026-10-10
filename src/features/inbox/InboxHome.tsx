@@ -18,6 +18,8 @@ import { FilterSelect, InboxPanel, type Arrival, type InboxPanelHandle } from ".
 import { PAGE_SIZE, PagedCaptureView } from "./PagedCaptureView";
 import { playDeparture, type DepartureHandle } from "./arrivalAnimation";
 import { UndoToast } from "./UndoToast";
+import { InitiationGuide, type BoxState } from "../initiation/InitiationGuide";
+import type { InitiationController } from "../initiation/useInitiation";
 import "./InboxHome.css";
 
 /** Nombre de captures affichées sur l'accueil (les plus récentes). */
@@ -43,7 +45,7 @@ interface CloseRequest {
  * d'une capture à droite (ou plein écran en fenêtre étroite), « Voir tout » et corbeille.
  * La base de données reste la source de vérité : les listes sont relues après chaque changement.
  */
-export function InboxHome() {
+export function InboxHome({ initiation }: { initiation?: InitiationController } = {}) {
   const [destinations, setDestinations] = useState<Destination[]>([]);
   const [filter, setFilter] = useState<InboxFilter>({ type: "all" });
   const [view, setViewState] = useState<View>("home");
@@ -138,6 +140,25 @@ export function InboxHome() {
   }, [filter, version, refresh]);
 
   const changed = () => setVersion((v) => v + 1);
+
+  // Visite d'initiation : le champ réel reçoit le focus à l'étape « capture » (aucune saisie imposée).
+  const initiationStep = initiation?.step ?? null;
+  useEffect(() => {
+    if (initiationStep === "capture") formRef.current?.focus();
+  }, [initiationStep]);
+  const createdId = initiation?.createdId ?? null;
+  const boxState: BoxState =
+    view !== "home"
+      ? "other-view"
+      : createdId === null || items.some((item) => item.id === createdId)
+        ? "visible"
+        : loadError
+          ? "unavailable"
+          : loading
+            ? "loading"
+            : filter.type !== "all"
+              ? "filtered"
+              : "gone";
 
   // Exécuté juste après le rendu où la fiche s'est refermée : la liste est alors visible et
   // mesurable (y compris en fenêtre étroite), et la relecture de la liste n'a pas encore eu lieu.
@@ -299,6 +320,7 @@ export function InboxHome() {
       if (fromTop !== null) panelRef.current?.snapshotPositions();
       setArrival({ id: created.id, fromTop });
     }
+    initiation?.captured(created.id); // seulement ici : l'enregistrement est confirmé
     changed();
   }
 
@@ -337,7 +359,12 @@ export function InboxHome() {
   const loadTrash = useCallback((before: Cursor | null) => listTrashedItems(PAGE_SIZE, before), []);
 
   return (
-    <div className="inbox-home" data-detail={selected ? "open" : "closed"}>
+    <div
+      className="inbox-home"
+      data-detail={selected ? "open" : "closed"}
+      data-initiation={initiationStep === "capture" || initiationStep === "box" ? initiationStep : undefined}
+      data-guide={initiationStep !== null ? "on" : undefined}
+    >
       {closePrompt && (
         <div className="inbox-home__prompt">
           <LeaveBanner
@@ -381,6 +408,7 @@ export function InboxHome() {
             onOpen={openItem}
             onShowAll={() => changeView("all")}
             onShowTrash={() => changeView("trash")}
+            highlightId={initiationStep === "box" ? createdId : null}
           />
         )}
         {view === "all" && (
@@ -413,6 +441,21 @@ export function InboxHome() {
                 Restaurer
               </button>
             )}
+          />
+        )}
+        {initiation && (
+          <InitiationGuide
+            step={initiationStep}
+            hasCreated={createdId !== null}
+            boxState={boxState}
+            onStart={initiation.start}
+            onStop={() => {
+              initiation.stop();
+              formRef.current?.focus();
+            }}
+            onBack={initiation.back}
+            onShowBox={() => changeView("home")}
+            onShowAll={() => setFilter({ type: "all" })}
           />
         )}
         {selected && (

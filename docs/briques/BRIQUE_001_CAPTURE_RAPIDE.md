@@ -116,7 +116,7 @@ Chaque sous-étape est validée par le propriétaire avant la suivante ; ce ne s
 - **001-B — Gestion :** ouvrir une capture, modifier texte et destination, suppression récupérable ou annulation claire, « Voir tout », tests.
 - **001-C — Mouvement (implémentée, voir section 13) :** animation ascendante et insertion visuelle, `reduced-motion`, robustesse au redimensionnement.
 - **001-D — Confort facultatif (option manuelle, voir section 6) :** case « Conserver ce choix » près de la destination ; la suggestion automatique est abandonnée.
-- **001-E — Initiation minimale :** spotlight sur le **vrai champ**, validation d'une capture, focus sur **la vraie boîte** ; « Passer » toujours disponible. Exemple proposé « Vendre ma PlayStation 5 » ou texte libre ; ne pas polluer des données réelles par une démo sans consentement. Le moteur complet d'initiation reste pour une brique ultérieure.
+- **001-E — Initiation minimale (implémentée, voir section 14) :** mise en évidence du **vrai champ**, progression sur un enregistrement réussi, mise en évidence de **la vraie boîte** et de la capture créée ; « Passer » toujours disponible ; aucun texte ni donnée imposés. Le moteur complet d'initiation (reprise, parcours thématiques) reste pour la brique 007.
 
 **Répartition avec la brique 002 (décision du 2026-10-10) :** l'édition et la suppression élémentaires d'une capture relèvent de 001-B ; la **conversion** en tâche/note/projet et le cycle de vie avancé restent en brique 002.
 
@@ -401,3 +401,43 @@ La carte réelle n'est masquée que pendant le trajet et **n'est jamais laissée
 - L'annonce par les lecteurs d'écran est inchangée (région vivante persistante). Après expiration, la capture reste récupérable depuis la vue Corbeille.
 - Composant réutilisé : `UndoToast` (aucun second système). Tests : 7 sur la notification ; interface : 132.
 - **Mesures dans la fenêtre Windows réelle (validées) :** position en bas à droite (`t` 764, `b` 796) à 1700, 960 et 600 px ; boîte, champ et « Envoyer » immobiles ; aucun recouvrement du champ, de « Envoyer » ni de la boîte ; disparition ≈ 4,4 s après l'action ; pause au survol (affichée 6 s pendant que la souris est dessus, disparition ≈ 3,8 s après la sortie du curseur, soit le temps restant) ; « Annuler » restaure la capture (20 → 20 cartes) et retire la notification.
+
+## 14. Réalisation 001-E : initiation minimale (implémentée le 2026-10-10, en attente de validation)
+
+### Décisions du propriétaire
+- Proposition automatique **uniquement lors d'une véritable première utilisation**, présentée **une seule fois** : mémorisée dès son premier affichage, même si l'application est fermée sans réponse.
+- Accès permanent « Découvrir » dans l'en-tête ; la visite est rejouable à volonté.
+- Aucune donnée fictive enregistrée ; aucun voile bloquant ; « Passer » à toutes les étapes.
+- Préférences **Dev et Stable séparées** ; installations existantes jamais interrompues.
+
+### Parcours
+1. **Proposition** (carte discrète) : « Découvrir » / « Plus tard ».
+2. **La capture rapide :** le vrai champ est entouré ; le focus y est placé ; l'étape n'avance **que** sur un enregistrement confirmé (jamais sur un envoi vide ou échoué).
+3. **La boîte « À organiser » (étape finale) :** « 2/2 · Votre capture est dans À organiser. » avec « Précédent » et « Terminer » ; la vraie boîte et **la capture réellement créée** (repérée par son identifiant) sont mises en évidence. Si un filtre ou une autre vue la masque, la carte l'explique et propose une action **explicite** (« Tout afficher », « Voir la boîte ») : rien n'est changé silencieusement, le brouillon du champ est conservé.
+
+Pas d'écran de conclusion séparé : « Terminer » clôt la visite à l'étape 2/2 ; le bouton « Découvrir » de l'en-tête reste visible pour la relancer. « Précédent » revient à l'étape 1 ; Échap (focus dans la carte) arrête la visite.
+
+### Mémorisation et détection
+- `localStorage` de la WebView, clé `morganiser.initiation.v1`, valeur `{ "version": 1, "parcours": { "general": { "proposee": true } } }` (rangée par parcours pour la brique 007). Aucune donnée personnelle ; rien dans SQLite ni Rust.
+- **Isolation Dev/Stable :** identifiants Tauri différents (`com.morganiser.desktop.dev` / `com.morganiser.desktop`), donc dossiers WebView2 distincts ; vérifié : seul le dossier Dev existe sur la machine de développement.
+- **Première utilisation** = clé absente **et** aucune capture, ni active ni dans la corbeille (lecture par `list_inbox_items` et `list_trashed_items`, sans nouvelle commande).
+- Clé absente mais captures présentes (installation Dev existante, cache WebView effacé) : réglage inscrit **en silence**, rien proposé.
+- Erreur de lecture, réponse incomplète ou incohérente, stockage indisponible, contenu illisible, écriture non confirmée : **aucune proposition** ; jamais traité comme « base vide ».
+
+### Limites connues
+- Une base Dev vidée à la main ressemble à une première utilisation : la proposition apparaît une fois.
+- Le `localStorage` n'est pas dans la base ni dans sa sauvegarde : un effacement du cache WebView2 avec une base vide reproposerait la visite une fois.
+- Une erreur de lecture lors d'un tout premier lancement n'inscrit rien : la proposition peut venir au lancement suivant.
+- Le bouton « Découvrir » n'existe pas dans l'aperçu navigateur (pas d'application Windows).
+- Échap ne fonctionne que si le focus est dans la carte (pour ne pas entrer en conflit avec Échap de la fiche).
+
+### Fichiers
+`src/features/initiation/` : `initiationStore.ts` (mémoire locale), `firstUse.ts` (détection), `useInitiation.ts` (état de la visite), `InitiationGuide.tsx` + `.css` (carte et contours). Points de contact : `App.tsx` (bouton), `InboxHome.tsx` (repères, notification d'un enregistrement réussi), `InboxPanel.tsx` et `CaptureCard.tsx` (repère de la capture). Animations 001-C, Rust et SQLite inchangés.
+
+### Règles UX
+- **Une ligne de message par étape**, toujours visible (aucun texte réservé aux lecteurs d'écran), avec ses boutons sur la même ligne quand la largeur le permet (≈ 49 px de haut), sinon sur deux lignes (≈ 78 px).
+- La carte flotte (hors flux, elle ne déplace rien) **sous l'en-tête de la vue** ; sa position est mesurée, donc le filtre, la corbeille et « Voir tout » ne sont pas recouverts. La liste réserve la même place (5 rem) aux étapes 1/2 et 2/2, dès l'ouverture de la carte et donc avant toute capture : aucun décalage à l'arrivée.
+- **Boîte trop basse** (moins de 175 px sous l'en-tête, fenêtre étroite ou basse) : la carte se pose sur l'en-tête : le filtre et la Corbeille sont **recouverts** (non masqués) pendant la visite, et la réserve est supprimée pour que la capture mise en évidence reste visible. Dès « Terminer » ou « Passer », la carte disparaît et ces contrôles redeviennent accessibles et non recouverts (vérifié à 360×480 et 380×560).
+- Contour intérieur uniquement : rien ne change de taille ni de place (boîte et champ de capture mesurés identiques avant et après l'étape).
+- `prefers-reduced-motion` : durée de transition à 0 (jetons).
+- Limite préexistante : sous ≈ 480 px de haut et ≈ 360 px de large, la liste de la boîte est presque vide de hauteur (16 px mesurés sans la visite) ; la visite n'y change rien.
