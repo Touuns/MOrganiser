@@ -33,6 +33,8 @@ L'implémentation exacte (JSON, code typé, base locale) sera décidée avec la 
 
 Première mise en œuvre prévue : sous-brique **001-E** (spotlight sur le vrai champ de capture et la vraie boîte « À organiser », « Passer » disponible), sans le moteur complet.
 
+**Réalisé en 001-E (2026-10-10) :** proposition unique à la première utilisation (mémorisée dès son affichage), bouton « Découvrir » permanent dans l'en-tête, parcours capture → boîte (« Terminer » à la dernière étape), étapes avancées seulement sur un enregistrement réussi, aucune donnée de démonstration. Mémoire : `localStorage` (`morganiser.initiation.v1`, rangé par parcours). Pas encore : reprise d'un parcours interrompu, parcours thématiques, progression par parcours, Centre de découverte — brique 007. Détail et limites : fiche brique 001, section 14.
+
 ## Quand une fonctionnalité n'existe pas encore
 
 Ne pas l'afficher comme disponible ; le parcours actif ne référence que les briques implémentées et vérifiées. Les nouvelles séquences sont ajoutées après chaque version stable.

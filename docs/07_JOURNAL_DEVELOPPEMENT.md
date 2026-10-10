@@ -276,6 +276,29 @@
 - **Validation du propriétaire :** en attente.
 - **Prochaine brique :** 001-E (non commencée).
 
+## 2026-10-10 — Brique 001-E : initiation minimale
+
+- **Objectif :** visite facultative et rejouable sur les vrais composants ; proposition unique à la première utilisation ; bouton permanent « Découvrir ».
+- **Décisions :** `localStorage` accepté (propriétaire) ; proposition mémorisée dès son affichage ; détection « clé absente + aucune capture active ou en corbeille » ; erreur de lecture jamais traitée comme une base vide ; moteur complet reporté à la brique 007.
+- **Fichiers modifiés (Claude) :** nouveau module `src/features/initiation/` (5 fichiers + 2 fichiers de tests) ; `App.tsx`, `App.css`, `InboxHome.tsx`, `InboxPanel.tsx`, `CaptureCard.tsx` ; fiche 001 (section 14), `06_INITIATION.md`, `05_ROADMAP.md`, ce journal. Rust, SQLite, animations 001-C : inchangés.
+- **Fonctionnement expliqué simplement :** au lancement, si la mémoire locale ne connaît pas encore la visite, on regarde la base : vide = vraie première utilisation, la proposition s'affiche (et est aussitôt mémorisée) ; non vide = installation existante, on mémorise sans rien afficher. Pendant la visite, un contour met en évidence le vrai champ puis la vraie boîte ; l'étape suivante n'arrive qu'après un enregistrement confirmé.
+- **Tests exécutés / résultats réels :** `pnpm typecheck` OK ; interface 169/169 à la livraison initiale (+28 : mémoire locale 6 ; parcours et détection 22, dont première utilisation, installation existante, corbeille, erreur SQLite, réponse incomplète, stockage indisponible ou non confirmé, « Plus tard », envoi vide ou échoué, capture mise en évidence, captures multiples, filtre, autre vue, Précédent/Suivant/Terminer, rejeu, Échap, clavier, visite lancée pendant la détection, aperçu navigateur). Rust non exécuté (non modifié).
+- **Vérification réelle :**
+  - Moteur Chromium (Edge) sur le vrai code, avec **base fictive en mémoire** (aucun accès à la base Dev ni à Stable) : proposition à 1000 et 380 px, absente après rechargement, parcours complet, fin, rejeu, Échap, installation existante, mouvement réduit (transition 0 s). Position du champ de capture identique avant, pendant et après. Un défaut de placement trouvé et corrigé : la carte recouvrait la capture mise en évidence (espace réservé en haut de liste ; texte compact en fenêtre étroite).
+  - Application Windows Dev réelle (base existante de plus de 20 captures, **aucune capture envoyée**) : pas de proposition, bouton présent, « Découvrir » met la visite à l'étape capture avec le focus dans le champ, « Passer » la ferme. La clé inscrite par l'essai a été **retirée** du profil Dev pour le restaurer à l'identique.
+- **Problèmes connus / limites :** voir fiche 001, section 14. Le parcours « première utilisation sur base vide » n'a été vérifié que sur base fictive, par respect de la base Dev.
+- **Validation du propriétaire :** en attente.
+- **Prochaine brique :** non commencée (007 pour le moteur complet).
+
+### 2026-10-10 — 001-E : dernière vérification UX (avant commit)
+
+- **Demande :** chaque étape doit rester compréhensible visuellement en fenêtre étroite ; la liste ne doit rien déplacer ; conclusion plus simple.
+- **Ajustements :** (1) une seule ligne de message par étape, toujours visible (le texte « réservé aux lecteurs d'écran » est supprimé) ; (2) étape « C'est tout » supprimée : l'étape 2/2 se termine par « Terminer » (« Votre capture est dans À organiser. ») ; (3) carte en une ligne quand la largeur le permet (49 px) et **placée sous l'en-tête** de la vue, position mesurée, pour ne plus cacher filtre, corbeille ni « Voir tout » ; (4) boîte trop basse (< 175 px sous l'en-tête) : carte sur l'en-tête, réserve supprimée, la capture reste visible ; (5) textes des actions raccourcis (« Tout afficher », « Voir la boîte »).
+- **Inchangés :** mémoire, détection, animations 001-C, Rust, SQLite.
+- **Mesures (Edge, base fictive, 1000×640, 900×480, 520×480, 380×560, 360×480, avec 0, 1 et 25 captures) :** champ de capture et boîte identiques entre les étapes 1/2 et 2/2 (écart 0 px) ; défilement conservé (position en bas identique à 380 et 900 px ; descente voulue à l'arrivée à 1000 px) ; carte sur la capture mise en évidence : 0 px partout ; champ, « Envoyer », destination, case : 0 px recouverts ; aucun défilement horizontal ; « Terminer » au clavier (Entrée) ferme la visite, **brouillon conservé**, aucune capture créée automatiquement.
+- **Limite constatée :** à 360×480 la boîte n'a que 16 px de liste **sans** la visite (préexistant) ; la capture y est donc à peine visible quelle que soit la carte.
+- **Tests :** `pnpm typecheck` OK ; interface 171/171 (+2 : conclusion visible sur une ligne sans texte caché ; « Terminer » au clavier avec brouillon conservé).
+
 ## Modèle à recopier après chaque brique
 
 ### AAAA-MM-JJ — Brique XXX : [nom]

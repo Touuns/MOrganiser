@@ -15,7 +15,7 @@
 - **001-B** *(implémentée, en attente de validation)* : fiche, modification avec protection du brouillon et verrou optimiste, corbeille récupérable, « Voir tout » paginé.
 - **001-C** : animation ascendante, mouvement réduit.
 - **001-D** (facultatif) : option manuelle « Conserver ce choix » pour garder la destination (suggestion automatique abandonnée).
-- **001-E** : initiation minimale sur le vrai champ et la vraie boîte.
+- **001-E** *(implémentée, en attente de validation)* : initiation minimale sur le vrai champ et la vraie boîte ; proposition unique à la première utilisation, bouton « Découvrir » permanent.
 - **Critère :** une capture créée reste visible après fermeture/réouverture, sans être automatiquement classée comme tâche.
 - Voir `docs/briques/BRIQUE_001_CAPTURE_RAPIDE.md` (référence unique).
 
