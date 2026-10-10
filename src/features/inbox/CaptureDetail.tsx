@@ -147,7 +147,7 @@ export function CaptureDetail(props: CaptureDetailProps) {
 
   // À l'ouverture : le texte (modifiable) ou le titre (corbeille, lecture seule).
   useEffect(() => {
-    (trashed ? headingRef.current : textareaRef.current)?.focus();
+    (trashed ? headingRef.current : textareaRef.current)?.focus({ preventScroll: true });
     // Une seule fois par capture ouverte (la fiche est remontée avec `key={item.id}`).
   }, []);
 
@@ -314,7 +314,7 @@ export function CaptureDetail(props: CaptureDetailProps) {
     if (choice === "keep") {
       dismissLeave();
       // Le bouton disparaît : on rend le focus au texte, pour poursuivre au clavier.
-      textareaRef.current?.focus();
+      textareaRef.current?.focus({ preventScroll: true });
     } else if (choice === "discard") {
       finishLeave("discarded");
     } else {

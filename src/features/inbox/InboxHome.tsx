@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   createInboxItem,
   listDestinations,
@@ -14,8 +14,9 @@ import { CaptureDetail, type CaptureDetailHandle } from "./CaptureDetail";
 import { LeaveBanner } from "../../components/LeaveBanner";
 import { useCloseGuard } from "../../lib/closeGuard";
 import { CaptureForm, type CaptureFormHandle } from "./CaptureForm";
-import { FilterSelect, InboxPanel } from "./InboxPanel";
+import { FilterSelect, InboxPanel, type Arrival, type InboxPanelHandle } from "./InboxPanel";
 import { PAGE_SIZE, PagedCaptureView } from "./PagedCaptureView";
+import { playDeparture, type DepartureHandle } from "./arrivalAnimation";
 import { UndoToast } from "./UndoToast";
 import "./InboxHome.css";
 
@@ -45,7 +46,11 @@ interface CloseRequest {
 export function InboxHome() {
   const [destinations, setDestinations] = useState<Destination[]>([]);
   const [filter, setFilter] = useState<InboxFilter>({ type: "all" });
-  const [view, setView] = useState<View>("home");
+  const [view, setViewState] = useState<View>("home");
+  const setView = (next: View) => {
+    viewRef.current = next;
+    setViewState(next);
+  };
   const [items, setItems] = useState<InboxItem[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -59,6 +64,23 @@ export function InboxHome() {
   const lastRequest = useRef(0);
   const detailRef = useRef<CaptureDetailHandle>(null);
   const formRef = useRef<CaptureFormHandle>(null);
+  const panelRef = useRef<InboxPanelHandle>(null);
+  // Carte à animer (déjà enregistrée) ; abandonnée si elle n'apparaît pas (ex. filtre).
+  const [arrival, setArrival] = useState<Arrival | null>(null);
+  const consumeArrival = useCallback(() => setArrival(null), []);
+  const viewRef = useRef<View>("home");
+  // Capture qui vient d'être mise à la corbeille : sa carte disparaît en fondu (visuel seulement).
+  const [departure, setDeparture] = useState<{ id: string; moveFocus: boolean } | null>(null);
+  const departureRef = useRef<DepartureHandle | null>(null);
+  const cancelDeparture = useCallback((restoreCard = false) => {
+    departureRef.current?.cancel({ restoreCard });
+    departureRef.current = null;
+  }, []);
+  useEffect(() => {
+    if (!arrival) return;
+    const timer = window.setTimeout(() => setArrival(null), 1500);
+    return () => window.clearTimeout(timer);
+  }, [arrival]);
   // Fermeture de la fenêtre suspendue par du texte non envoyé dans la capture rapide.
   const [closePrompt, setClosePrompt] = useState<{
     request: CloseRequest;
@@ -116,6 +138,39 @@ export function InboxHome() {
   }, [filter, version, refresh]);
 
   const changed = () => setVersion((v) => v + 1);
+
+  // Exécuté juste après le rendu où la fiche s'est refermée : la liste est alors visible et
+  // mesurable (y compris en fenêtre étroite), et la relecture de la liste n'a pas encore eu lieu.
+  useLayoutEffect(() => {
+    if (!departure) return;
+    const { id, moveFocus } = departure;
+    setDeparture(null);
+    const card = [...document.querySelectorAll<HTMLElement>(".inbox-home__main [data-capture-id]")].find(
+      (element) => element.dataset.captureId === id,
+    );
+    if (moveFocus) {
+      // Le focus ne se perd pas avec la carte : voisin le plus proche, sinon le champ de capture.
+      const neighbour = card?.nextElementSibling ?? card?.previousElementSibling;
+      const target = neighbour?.querySelector<HTMLElement>(".inbox__open");
+      if (target) target.focus({ preventScroll: true });
+      else formRef.current?.focus();
+    }
+    cancelDeparture();
+    if (card) departureRef.current = playDeparture({ card });
+  }, [departure, cancelDeparture]);
+
+  // Redimensionnement, changement de filtre ou démontage : la transition est annulée net.
+  useEffect(() => {
+    const stop = () => cancelDeparture();
+    window.addEventListener("resize", stop);
+    return () => {
+      window.removeEventListener("resize", stop);
+      cancelDeparture();
+    };
+  }, [cancelDeparture]);
+  useEffect(() => {
+    cancelDeparture();
+  }, [filter, cancelDeparture]);
 
   // Fermeture normale de la fenêtre. On examine l'état ACTUEL des brouillons : la fiche
   // d'abord, puis la capture rapide, puis les écritures en cours. Chaque décision relance
@@ -213,13 +268,16 @@ export function InboxHome() {
     opener.current = null;
     // Rend le focus à la carte d'où l'on est venu, si elle existe encore.
     window.setTimeout(() => {
-      if (target?.isConnected) target.focus();
+      if (target?.isConnected) target.focus({ preventScroll: true });
     }, 0);
   }
 
   function changeView(next: View) {
     if (next === view) return;
-    guard(() => setView(next));
+    guard(() => {
+      cancelDeparture();
+      setView(next);
+    });
   }
 
   async function handleCapture(content: string, destinationId: string | null) {
@@ -232,6 +290,15 @@ export function InboxHome() {
       kind: "ok",
       text: visible ? "Capture enregistrée." : "Capture enregistrée (masquée par le filtre actuel).",
     });
+    // Mouvement purement visuel, APRÈS l'enregistrement et sans jamais le retarder : la
+    // carte part de la zone de saisie si la capture sera visible dans la boîte d'accueil.
+    // La liste est ramenée en bas pour toute nouvelle capture visible ; le départ de l'animation
+    // n'est mesuré que si la zone de saisie est affichée.
+    if (visible && viewRef.current === "home") {
+      const fromTop = formRef.current?.inputTop() ?? null;
+      if (fromTop !== null) panelRef.current?.snapshotPositions();
+      setArrival({ id: created.id, fromTop });
+    }
     changed();
   }
 
@@ -242,6 +309,7 @@ export function InboxHome() {
 
   async function undoTrash(itemId: string) {
     setToast(null);
+    cancelDeparture(true); // pas de carte fantôme persistante ; la carte restaurée est visible
     try {
       await track(restoreInboxItem(itemId));
       setStatus({ kind: "ok", text: "Capture restaurée." });
@@ -294,8 +362,13 @@ export function InboxHome() {
         </div>
       )}
       <div className="inbox-home__main">
+        {/* Scène : la vue et la fiche flottante, bornées à la zone de la boîte (jamais la capture). */}
+        <div className="inbox-home__stage">
         {view === "home" && (
           <InboxPanel
+            ref={panelRef}
+            arrival={arrival}
+            onArrivalConsumed={consumeArrival}
             items={items}
             total={total}
             destinations={destinations}
@@ -342,6 +415,41 @@ export function InboxHome() {
             )}
           />
         )}
+        {selected && (
+          <div className="inbox-home__detail">
+            <CaptureDetail
+              key={selected.id}
+              ref={detailRef}
+              item={selected}
+              destinations={destinations}
+              onClose={closeDetail}
+              onSaved={() => {
+                setStatus({ kind: "ok", text: "Modifications enregistrées." });
+                changed();
+              }}
+              track={track}
+              onTrashed={(item, closeSheet) => {
+                // Le résultat concerne la capture `item` : il ne ferme que SA fiche, et seulement
+                // si elle est toujours ouverte et sans saisie récente. Jamais une autre fiche.
+                const closing = closeSheet && selectedRef.current?.id === item.id;
+                if (closing) {
+                  opener.current = null; // la carte d'origine disparaît : le focus va à son voisine
+                  closeDetail();
+                } else refreshOpenSheet(item.id);
+                // Disparition en fondu de SA carte, après l'enregistrement en base (jamais avant).
+                setDeparture({ id: item.id, moveFocus: closing });
+                setToast({ id: Date.now(), itemId: item.id });
+                setStatus(null);
+                changed();
+              }}
+              onRestored={() => {
+                setStatus({ kind: "ok", text: "Capture restaurée." });
+                changed();
+              }}
+            />
+          </div>
+        )}
+        </div>
         <CaptureForm
           ref={formRef}
           destinations={destinations}
@@ -362,47 +470,22 @@ export function InboxHome() {
           >
             {status?.text ?? ""}
           </p>
-          {toast && (
-            <UndoToast
-              key={toast.id}
-              message="Capture mise à la corbeille."
-              actionLabel="Annuler"
-              onAction={() => void undoTrash(toast.itemId)}
-              onDismiss={() => setToast(null)}
-            />
-          )}
         </div>
       </div>
 
-      {selected && (
-        <div className="inbox-home__detail">
-          <CaptureDetail
-            key={selected.id}
-            ref={detailRef}
-            item={selected}
-            destinations={destinations}
-            onClose={closeDetail}
-            onSaved={() => {
-              setStatus({ kind: "ok", text: "Modifications enregistrées." });
-              changed();
-            }}
-            track={track}
-            onTrashed={(item, closeSheet) => {
-              // Le résultat concerne la capture `item` : il ne ferme que SA fiche, et seulement
-              // si elle est toujours ouverte et sans saisie récente. Jamais une autre fiche.
-              if (closeSheet && selectedRef.current?.id === item.id) closeDetail();
-              else refreshOpenSheet(item.id);
-              setToast({ id: Date.now(), itemId: item.id });
-              setStatus(null);
-              changed();
-            }}
-            onRestored={() => {
-              setStatus({ kind: "ok", text: "Capture restaurée." });
-              changed();
-            }}
+      {/* Région vivante persistante : l'ajout du message est annoncé par les lecteurs d'écran. */}
+      <div className="toast-region" aria-live="polite" aria-atomic="true">
+        {toast && (
+          <UndoToast
+            key={toast.id}
+            message="Déplacée dans la corbeille"
+            actionLabel="Annuler"
+            onAction={() => void undoTrash(toast.itemId)}
+            onDismiss={() => setToast(null)}
           />
-        </div>
-      )}
+        )}
+      </div>
+
     </div>
   );
 }

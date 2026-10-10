@@ -1,43 +1,30 @@
 /*
- * Colonne principale (boîte au-dessus, capture en dessous) et, à droite, la fiche d'une
- * capture. Seuil de bascule : 900 px (à ajuster après essais, ex. 960 px).
+ * RÈGLE UX : un panneau secondaire ne déplace jamais le contenu principal.
+ *
+ * La colonne (boîte « À organiser » au-dessus, capture rapide en dessous) a une position et une
+ * taille qui ne dépendent PAS de l'ouverture d'une fiche. La fiche est un panneau indépendant :
+ *   - écran très large : à droite de la colonne, sans recouvrement ;
+ *   - largeur intermédiaire : flottante, à droite de la boîte (la capture rapide reste libre) ;
+ *   - fenêtre étroite (< 900 px) : elle remplace temporairement la vue principale.
  */
 .inbox-home {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   height: 100%;
   min-height: 0;
   max-width: 760px;
   margin: 0 auto;
-  grid-template-rows: auto minmax(0, 1fr);
-  column-gap: var(--space-4);
-  row-gap: 0;
 }
 
-/* Avertissement de fermeture (texte non envoyé) : toujours visible, au-dessus des colonnes. */
+/* Avertissement de fermeture (texte non envoyé) : toujours visible, au-dessus de la colonne. */
 .inbox-home__prompt {
-  grid-column: 1 / -1;
   grid-row: 1;
   margin-bottom: var(--space-3);
 }
 
-.inbox-home__main,
-.inbox-home__detail {
-  grid-row: 2;
-}
-
-/* Emplacement réservé : la notification recouvre la ligne d'état, rien ne se déplace. */
-.inbox-home__feedback {
-  position: relative;
-  min-height: 2.75rem;
-}
-
-.inbox-home__feedback .toast {
-  position: absolute;
-  inset: 0;
-}
-
 .inbox-home__main {
+  grid-row: 2;
   container-type: inline-size;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto auto;
@@ -45,15 +32,33 @@
   min-height: 0;
 }
 
-/* Les vues occupent la rangée extensible, la capture reste visible en dessous. */
-.inbox-home__main > .inbox,
-.inbox-home__main > .paged {
+/*
+ * Scène : occupe la rangée extensible ; elle contient la vue (boîte) et le panneau de la
+ * fiche, qui est positionné par rapport à elle et ne peut donc jamais atteindre la capture.
+ */
+.inbox-home__stage {
+  position: relative;
+  display: grid;
   min-height: 0;
 }
 
-.inbox-home__detail {
-  display: grid;
+.inbox-home__stage > .inbox,
+.inbox-home__stage > .paged {
   min-height: 0;
+}
+
+/* Panneau de la fiche : hors flux, il ne prend aucune place et ne déplace rien. */
+.inbox-home__detail {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  display: grid;
+  width: min(360px, 100%);
+  min-height: 0;
+  box-shadow: -8px 0 24px rgb(0 0 0 / 0.28);
+  border-radius: var(--radius-md);
 }
 
 .inbox-home__status {
@@ -66,16 +71,27 @@
   color: var(--color-danger);
 }
 
-@media (min-width: 900px) {
-  .inbox-home[data-detail="open"] {
-    max-width: none;
-    grid-template-columns: minmax(0, 1fr) minmax(340px, 400px);
+/* Écran très large : la fiche se place à droite de la colonne, sans la recouvrir. */
+@media (min-width: 1580px) {
+  .inbox-home__detail {
+    right: auto;
+    left: calc(100% + var(--space-4));
+    width: 380px;
+    box-shadow: none;
   }
 }
 
 /* Fenêtre étroite : la fiche remplace temporairement la vue principale. */
 @media (max-width: 899px) {
-  .inbox-home[data-detail="open"] .inbox-home__main {
+  /* La vue, la capture rapide et la ligne d'état sont masquées ; la fiche prend leur place. */
+  .inbox-home[data-detail="open"] .inbox-home__stage > :not(.inbox-home__detail),
+  .inbox-home[data-detail="open"] .inbox-home__main > :not(.inbox-home__stage) {
     display: none;
+  }
+
+  .inbox-home__detail {
+    position: static;
+    width: auto;
+    box-shadow: none;
   }
 }

@@ -22,7 +22,7 @@ export function CaptureCard(props: CaptureCardProps) {
   const { item, destinationLabel, selected, onOpen, action, datePrefix } = props;
   const date = props.date ?? item.createdAt;
   return (
-    <li className="inbox__item" data-selected={selected || undefined}>
+    <li className="inbox__item" data-capture-id={item.id} data-selected={selected || undefined}>
       <button
         type="button"
         className="inbox__open"
