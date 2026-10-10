@@ -15,6 +15,9 @@
   --color-text-muted: #56636f;
   --color-accent: #1f7a72;
   --color-accent-contrast: #ffffff;
+  --color-accent-soft: #dcefec;
+  --color-accent-strong: #155e57;
+  --color-danger: #b42318;
   --color-focus: #1f6fd1;
   --color-env-dev-bg: #fff1d6;
   --color-env-dev-text: #7a4b00;
@@ -63,6 +66,9 @@
     --color-text-muted: #9aa8b5;
     --color-accent: #5ec2b7;
     --color-accent-contrast: #0c1a19;
+    --color-accent-soft: #173f3b;
+    --color-accent-strong: #9ee6dc;
+    --color-danger: #ff8a80;
     --color-focus: #6aa8ff;
     --color-env-dev-bg: #4a3510;
     --color-env-dev-text: #ffd48a;

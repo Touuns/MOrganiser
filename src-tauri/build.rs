@@ -2,7 +2,12 @@
 /// de Tauri pour TOUTES les commandes de l'application : une commande absente de cette
 /// liste, ou non autorisée dans `capabilities/`, est refusée à l'exécution.
 /// Politique complète : docs/04_SECURITE.md, section « Commandes Rust et permissions ».
-const APP_COMMANDS: &[&str] = &["app_info"];
+const APP_COMMANDS: &[&str] = &[
+    "app_info",
+    "list_destinations",
+    "list_inbox_items",
+    "create_inbox_item",
+];
 
 fn main() {
     tauri_build::try_build(

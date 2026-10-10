@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { isTauri } from "@tauri-apps/api/core";
 import { Badge } from "./components/Badge";
 import { Panel } from "./components/Panel";
+import { InboxHome } from "./features/inbox/InboxHome";
 import { fetchAppInfo, type AppInfo } from "./lib/appInfo";
 import "./App.css";
 
@@ -10,8 +12,8 @@ type InfoState =
   | { status: "error"; message: string };
 
 /**
- * Fenêtre de fondation (brique 000). Elle vérifie seulement que l'application démarre
- * et dans quel environnement ; ce n'est pas le tableau de bord définitif.
+ * Accueil de la brique 001 : boîte « À organiser » au-dessus de la capture rapide.
+ * Prototype limité à ces deux éléments, pas le tableau de bord définitif (brique 006).
  */
 export function App() {
   const [state, setState] = useState<InfoState>({ status: "loading" });
@@ -36,18 +38,21 @@ export function App() {
       </header>
 
       <main className="app__main">
-        <Panel title="Fondations">
-          <p>L'application démarre correctement.</p>
-          <p className="app__muted">
-            Aucune fonctionnalité n'est encore disponible : la capture rapide arrivera avec la
-            brique 001.
-          </p>
-        </Panel>
-
-        <Panel title="Environnement">
-          <EnvironmentDetails state={state} />
-        </Panel>
+        {isTauri() ? (
+          <InboxHome />
+        ) : (
+          <Panel title="Aperçu navigateur">
+            <p className="app__muted">
+              La capture fonctionne uniquement dans l'application Windows (<code>pnpm app:dev</code>).
+              Aucune donnée n'est lue ni écrite ici.
+            </p>
+          </Panel>
+        )}
       </main>
+
+      <footer className="app__footer">
+        <EnvironmentDetails state={state} />
+      </footer>
     </div>
   );
 }
@@ -65,7 +70,7 @@ function EnvironmentBadge({ state }: { state: InfoState }) {
 function EnvironmentDetails({ state }: { state: InfoState }) {
   switch (state.status) {
     case "loading":
-      return <p className="app__muted">Lecture de l'environnement…</p>;
+      return null;
     case "error":
       return (
         <p role="alert">
@@ -73,23 +78,11 @@ function EnvironmentDetails({ state }: { state: InfoState }) {
         </p>
       );
     case "ready":
-      if (state.info === null) {
-        return (
-          <p className="app__muted">
-            Interface ouverte dans un navigateur, hors de l'application Windows. Aucune donnée
-            n'est lue ni écrite.
-          </p>
-        );
-      }
+      if (state.info === null) return null;
       return (
-        <dl className="app__facts">
-          <dt>Version</dt>
-          <dd>{state.info.version}</dd>
-          <dt>Dossier de données</dt>
-          <dd>
-            <code>{state.info.dataDir}</code>
-          </dd>
-        </dl>
+        <p>
+          Version {state.info.version} · Données : <code>{state.info.dataDir}</code>
+        </p>
       );
   }
 }

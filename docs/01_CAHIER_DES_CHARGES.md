@@ -21,16 +21,17 @@
 - Autres espaces contextuels : attente, échéances, capture, boîte « À organiser », informations financières utiles.
 - Grand écran : sections lisibles, alignement rigoureux, espacement généreux ; sections repliables ou masquables ; personnalisation progressive.
 - Petit écran : les mêmes données dans une disposition compacte et adaptée.
-- **Champ de capture rapide visible immédiatement**, de préférence côte à côte avec la boîte « À organiser » en mode étendu.
+- **Champ de capture rapide visible immédiatement**, avec la boîte « À organiser » placée **juste au-dessus** (décision du 2026-10-10, remplace « côte à côte »).
 - Les indicateurs restent discrets et ne remplacent pas les listes.
 
 ## C. Capture et boîte de réception — Décidé
 
 - Texte libre ; saisie quasi instantanée ; possibilité alternative de fiche structurée.
 - Une capture non classée entre dans une boîte « À organiser », **pas automatiquement dans les tâches**.
+- **Destination facultative unique** (ce n'est **pas** un tag) : l'espace de responsabilité (Moi, Externe) ou la rubrique (Administratif, Finances, Inventaire) où l'élément sera traité. La capture reste dans « À organiser », filtrable par destination ; un seul enregistrement, jamais de copie. Détails : `briques/BRIQUE_001_CAPTURE_RAPIDE.md`.
 - L'élément peut ensuite devenir tâche, note, projet, objet d'inventaire, etc. sans perte de contenu.
 - Un élément peut être conservé tel quel pour plus tard.
-- Animation courte et utile : une carte part du champ et rejoint visuellement la boîte de réception ; ne confirmer l'arrivée qu'après sauvegarde réussie ; version sans animation selon préférence d'accessibilité.
+- Animation courte et utile : une carte part du champ et **monte** rejoindre la boîte de réception située au-dessus ; ne confirmer l'arrivée qu'après sauvegarde réussie ; version sans animation selon préférence d'accessibilité.
 - La capture restera à terme accessible depuis le téléphone, avec synchronisation (solution à décider).
 
 ## D. Tâches, sous-tâches et démarches — Décidé

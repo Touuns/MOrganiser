@@ -21,7 +21,7 @@ Menaces prioritaires : perte de fichiers, corruption de base, modification accid
 
 - Sans manifeste d'application, Tauri **n'applique pas** le contrôle d'accès aux commandes de l'application pour le contenu local : une liste `permissions` vide ne bloque rien. Seul le contenu distant est bloqué.
 - Depuis la brique 000, un manifeste est déclaré dans `src-tauri/build.rs` (`APP_COMMANDS`). Le contrôle d'accès s'applique alors à **toutes** les commandes : une commande absente du manifeste, ou non autorisée dans `src-tauri/capabilities/default.json`, est refusée.
-- État actuel : une seule commande, `app_info` (lecture seule, sans argument), autorisée nommément (`allow-app-info`) pour la seule fenêtre `main`. Aucune permission système (`core:*`) ni extension (plugin).
+- État actuel (brique 001-A) : quatre commandes, chacune autorisée nommément pour la seule fenêtre `main` : `app_info` (lecture), `list_destinations` (lecture), `list_inbox_items` (lecture filtrée, limite plafonnée à 200), `create_inbox_item` (création validée côté Rust). Aucune permission système (`core:*`) ni extension (plugin). Le test `chaque_commande_est_declaree_autorisee_et_enregistree` vérifie la cohérence `build.rs` ↔ capacité ↔ `lib.rs`.
 - Vérifié en réel : en retirant `allow-app-info`, l'appel est refusé (« app_info not allowed »).
 - La CSP interdit tout chargement ou appel externe. La frontière à défendre est donc le passage interface → Rust : tout ce qui arrive par une commande est une **donnée non fiable**.
 

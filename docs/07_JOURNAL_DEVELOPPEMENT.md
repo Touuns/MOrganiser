@@ -52,6 +52,74 @@
 - **Vérifié avec `git check-ignore`** : 10 chemins de code plausibles ne sont pas ignorés (ex. `src-tauri/src/data/mod.rs`) ; 18 chemins sensibles ou générés le sont ; la liste des fichiers ignorés du dépôt est inchangée ; aucun fichier suivi n'est devenu ignoré.
 - **Aucune modification fonctionnelle.**
 
+## 2026-10-10 — Brique 001-A : capture et persistance
+
+- **Objectif :** boîte « À organiser » au-dessus du champ, capture immédiate, destination facultative (pas un tag) et filtre, SQLite locale, relecture après relance, erreurs sans perte, tests.
+- **Décisions prises (validées par le propriétaire) :** destinations Moi, Externe (responsabilité), Administratif, Finances, Inventaire (rubriques) ; base `morganiser.db` ; spécification V2 fusionnée dans `BRIQUE_001_CAPTURE_RAPIDE.md` (référence unique, V2 supprimée) ; édition/suppression en 001-B, conversion en brique 002. Ajout en cours de route : checkpoint WAL à la fermeture.
+- **Fichiers modifiés (Claude) :** voir la fiche brique 001, section 11 ; docs `01`, `02`, `03`, `04`, `05`, `06`, `09` ; `prompts/Claude/` vérifié (aucun secret) et à versionner.
+- **Fonctionnement expliqué simplement :** l'interface envoie le texte à une commande Rust autorisée ; Rust le valide et l'écrit dans SQLite ; seulement après confirmation, l'interface vide le champ et relit la liste depuis la base.
+- **Tests exécutés / résultats réels :**
+  - `pnpm typecheck` : OK. `pnpm test` : 24/24 interface, 43/43 Rust.
+  - Fenêtre Dev réelle, pilotée par le protocole DevTools de WebView2 (port 9222 sur `127.0.0.1` uniquement, pendant les essais, sans modification du code) :
+    - champ actif à l'ouverture, boîte au-dessus ;
+    - « Vendre ma PlayStation 5 » + 3 × Entrée → **une** carte « À classer », champ vidé, focus conservé ;
+    - Maj+Entrée → retour à la ligne ; destination Inventaire affichée puis remise à « Aucune » ; filtres Inventaire et « À classer » corrects ;
+    - saisie vide ou d'espaces → rien créé ;
+    - `'; DROP TABLE inbox_items; --`, accents, balises HTML, mot très long → affichés tels quels, aucune balise interprétée, table intacte ;
+    - fenêtre étroite 380 × 560 (émulée) → capture visible, seule la liste défile ;
+    - fermeture puis relance → captures et destinations conservées ;
+    - **échec réel** (base verrouillée par un script pendant 12 s) → « Envoi… », puis erreur, texte et destination conservés, aucune carte ; nouvel essai après levée du verrou → enregistré ;
+    - contrôle en lecture seule de la base Dev : 5 captures distinctes, schéma v1, 5 destinations.
+  - Dossier Stable `%LOCALAPPDATA%\com.morganiser.desktop` : absent avant et après.
+- **Problèmes rencontrés :**
+  - après la première fermeture, toutes les captures n'étaient que dans `morganiser.db-wal` (`.db` = 4 Ko) → ajout d'un checkpoint à la fermeture ; vérifié : `.db` = 28 Ko, `-wal` = 0 ;
+  - une capture d'écran par Windows a montré un autre contenu que la fenêtre (fenêtre non mise au premier plan) : image supprimée aussitôt, aucune touche envoyée ; les essais ont ensuite été menés par le protocole DevTools, indépendant de l'écran.
+- **Diagnostic Codex :** non demandé à ce stade.
+- **Problèmes connus / limites :** voir fiche brique 001, section 11.
+- **Validation du propriétaire :** en attente.
+- **Prochaine étape :** 001-B (consulter, modifier, suppression récupérable, « Voir tout »), après validation.
+
+## 2026-10-10 — Brique 001-A : vérification WAL et interruption brutale (prévalidation)
+
+- **Demande du propriétaire :** vérifier que le checkpoint à la fermeture ne compromet ni la récupération après interruption brutale, ni les données validées ; gestion des fichiers auxiliaires ; absence de perte si le checkpoint échoue ; documentation sans ambiguïté sur la copie de `morganiser.db`.
+- **Constats :**
+  - le checkpoint SQLite est sûr par construction (`-wal` vidé seulement après écriture et synchronisation de `.db`) ;
+  - le réglage `synchronous` n'était pas fixé explicitement → fixé à `FULL` (chaque capture confirmée est forcée sur disque) ;
+  - un checkpoint bloqué renvoie « occupé » sans erreur, ce que le code ignorait → résultat désormais lu (`Complete` / `Incomplete`) et signalé dans le terminal ; aucune perte dans les deux cas ;
+  - la documentation et un commentaire laissaient entendre que `.db` seul suffisait une fois l'application fermée → corrigé : jamais `.db` seul ; les trois fichiers ensemble, application fermée, en attendant le système de sauvegarde.
+- **Fichiers modifiés :** `src-tauri/src/storage/mod.rs`, `src-tauri/src/lib.rs`, fiche brique 001 (sections 7 et 11).
+- **Tests exécutés / résultats réels :**
+  - `pnpm test` : 24/24 interface ; 46/46 Rust (+1 ignoré, lancé comme sous-processus) ; `pnpm typecheck` OK ;
+  - nouveau test : un sous-processus valide une capture puis est **tué** (TerminateProcess) → `-wal` non vide, réouverture : capture présente ;
+  - nouveau test : après arrêt sans checkpoint, une copie de `.db` seul ne contient pas la capture ; `.db` + `-wal` (sans `-shm`) la contient ;
+  - nouveau test : checkpoint bloqué par une lecture → `Incomplete`, aucune perte après réouverture ;
+  - **en réel** : capture dans l'application Dev puis arrêt forcé du processus → `.db` inchangé, données uniquement dans `-wal` ; relance → toutes les captures présentes ; fermeture normale → checkpoint complet (`-wal` = 0), 9 captures lues dans `.db`.
+  - Dossier Stable : absent avant et après.
+- **Observation :** 3 captures de test (« Faire un test », « DEuxieme test », « test », 03:06) ont été ajoutées par le propriétaire pendant sa validation manuelle ; elles ont été conservées. Son instance `pnpm app:dev` occupait le port 1420, ce qui explique l'échec « port 1420 already in use » d'un de mes lancements (même cause probable que l'incident noté en brique 000).
+
+## 2026-10-10 — Brique 001-A : corrections finales (ordre d'affichage, fermeture)
+
+- **Ordre d'affichage (demande du propriétaire) :** ordre chronologique croissant, nouvelle capture en bas de la liste, au-dessus du champ. Rust continue de sélectionner les 20 **plus récentes** (tri décroissant + limite) ; l'interface inverse cette sélection pour l'affichage. Une simple inversion du tri SQL aurait affiché les 20 plus anciennes : écarté. La liste défile vers le bas au chargement, au changement de filtre et après une capture réussie ; en cas d'échec, la liste n'est pas modifiée. La mention « Les 20 plus récentes sur N » est placée en haut de la liste.
+- **Fichiers modifiés :** `src/features/inbox/InboxHome.tsx`, `InboxPanel.tsx`, `InboxPanel.css`, `InboxHome.test.tsx` ; fiche brique 001, `02`, `09`, README.
+- **Fermeture (signalement du propriétaire : `Failed to unregister class Chrome_WidgetWin_0. Error = 1411` et `STATUS_CONTROL_C_EXIT (0xc000013a)`) :**
+  - fermeture normale vérifiée deux fois par `WM_CLOSE` (le message envoyé par le bouton `×`), sans `Ctrl+C` : code de sortie **0**, aucun message `Chrome_WidgetWin`, aucun `0xc000013a`, checkpoint WAL complet (`-wal` = 0), captures retrouvées à la relance ;
+  - `0xc000013a` signifie par définition « arrêté par Ctrl+C ou fermeture de la console » : `Ctrl+C` dans le terminal de `pnpm app:dev` interrompt aussi l'application (compilation debug liée à la console). Le message WebView2 accompagne cette interruption (déjà observé lors d'un arrêt anormal en brique 000). Sans conséquence pour les données (récupération depuis `-wal`, vérifiée par test et en réel) ;
+  - aucun contournement ajouté ; consigne documentée : fermer par `×` ;
+  - la ligne `ELIFECYCLE … exit code 4294967295` présente à chaque fermeture provient de l'arrêt du serveur Vite par Tauri, pas de l'application.
+- **Tests exécutés / résultats réels :**
+  - `pnpm typecheck` OK ; `pnpm test` : 25/25 interface, 46/46 Rust (+1 ignoré, sous-processus).
+  - En réel : ordre initial (plus ancienne en haut, plus récente en bas, liste défilée en bas) ; 3 captures successives ajoutées en bas dans l'ordre ; 10 captures supplémentaires (22 au total) → 20 affichées, les 2 plus anciennes exclues, mention « Les 20 plus récentes sur 22 » ; filtres Finances (2) et « À classer » (15) en ordre chronologique ; fermeture `×` puis relance : même sélection, même ordre.
+  - Dossier Stable : absent.
+- **Données Dev :** 22 captures fictives (les miennes et les 3 du propriétaire).
+
+## 2026-10-10 — Brique 001-A : correctif après revue GitHub (bases de version future)
+
+- **Observation de la revue (ChatGPT, commit `cd9da28`) :** `open()` appliquait les réglages (dont `journal_mode = WAL`) avant de vérifier `user_version` ; une base de version future pouvait donc être modifiée avant d'être refusée.
+- **Vérification :** confirmée par un test écrit avant la correction : sur une base v99 en journal classique, le refus faisait passer l'en-tête du fichier en WAL (octets 18-19 : `1,1` → `2,2`) et incrémentait son compteur de modifications.
+- **Correction (sans refonte) :** `check_schema_version()` lit la version (lecture seule) en premier dans `open()` ; les réglages et migrations ne viennent qu'ensuite ; `migrate()` réutilise le même contrôle.
+- **Fichiers modifiés :** `src-tauri/src/storage/mod.rs`, fiche brique 001, `03_ARCHITECTURE.md`.
+- **Tests exécutés / résultats réels :** nouveau test `une_base_future_en_journal_classique_reste_strictement_intacte` (fichier identique octet pour octet, pas de `-wal` créé, mode `delete` conservé, `user_version` = 99) ; `pnpm typecheck` OK ; `pnpm test` : 25/25 interface, 47/47 Rust (+1 ignoré) ; le test des réglages WAL/FULL des bases compatibles reste vert.
+
 ## Modèle à recopier après chaque brique
 
 ### AAAA-MM-JJ — Brique XXX : [nom]

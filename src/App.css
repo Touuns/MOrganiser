@@ -1,7 +1,8 @@
+/* Hauteur de la fenêtre : seule la liste « À organiser » défile, jamais la page. */
 .app {
-  display: flex;
-  flex-direction: column;
-  min-height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  height: 100%;
 }
 
 .app__header {
@@ -19,12 +20,11 @@
 }
 
 .app__main {
-  display: grid;
-  gap: var(--space-4);
-  align-content: start;
   width: 100%;
-  max-width: 720px;
-  padding: var(--space-6);
+  max-width: 760px;
+  min-height: 0;
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-6) var(--space-2);
 }
 
 .app__muted {
@@ -32,17 +32,21 @@
   font-size: var(--text-sm);
 }
 
-.app__facts {
-  display: grid;
-  grid-template-columns: max-content 1fr;
-  gap: var(--space-2) var(--space-4);
-  font-size: var(--text-sm);
-}
-
-.app__facts dt {
+.app__footer {
+  padding: var(--space-2) var(--space-6);
+  border-top: 1px solid var(--color-border);
+  font-size: var(--text-xs);
   color: var(--color-text-muted);
+  overflow-wrap: anywhere;
 }
 
-.app__facts dd {
-  overflow-wrap: anywhere;
+@media (max-width: 520px) {
+  .app__header,
+  .app__footer {
+    padding-inline: var(--space-4);
+  }
+
+  .app__main {
+    padding-inline: var(--space-3);
+  }
 }

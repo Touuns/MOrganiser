@@ -9,16 +9,19 @@
 - Séparer Dev / Stable / données ; préparer lancement local et gestion Git.
 - **Critère :** l'application démarre dans Dev sans réseau, se ferme proprement et une commande de test reproductible fonctionne.
 
-## Brique 001 — Capture rapide + boîte « À organiser »
+## Brique 001 — Capture rapide + boîte « À organiser » (découpée en sous-étapes validées une à une)
 
-- Champ libre visible, ajout, affichage dans boîte de réception, persistance locale, redémarrage sans perte, premiers tests.
-- Animation et sophistication visuelle **après fiabilisation** de l'enregistrement.
+- **001-A** : boîte au-dessus du champ, saisie immédiate, destination facultative (pas un tag) et filtre, SQLite locale, relecture après relance, erreurs, tests.
+- **001-B** : consulter, modifier texte/destination, suppression récupérable ou annulable, « Voir tout ».
+- **001-C** : animation ascendante, mouvement réduit.
+- **001-D** (facultatif) : suggestion de conserver temporairement la destination.
+- **001-E** : initiation minimale sur le vrai champ et la vraie boîte.
 - **Critère :** une capture créée reste visible après fermeture/réouverture, sans être automatiquement classée comme tâche.
-- Voir `docs/briques/BRIQUE_001_CAPTURE_RAPIDE.md`.
+- Voir `docs/briques/BRIQUE_001_CAPTURE_RAPIDE.md` (référence unique).
 
 ## Brique 002 — Vie d'un élément capturé
 
-- Consulter, éditer, classer/convertir en tâche, annuler, supprimer avec garde-fous ; conserver la source.
+- Classer/**convertir** en tâche, note ou projet, cycle de vie avancé ; conserver la source. L'édition et la suppression élémentaires d'une capture sont traitées en 001-B (décision du 2026-10-10).
 - **Critère :** aucune perte de texte pendant la conversion.
 
 ## Brique 003 — Actions de base et historique

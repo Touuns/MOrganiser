@@ -10,6 +10,8 @@ const STABLE_CONF: &str = include_str!("../tauri.conf.json");
 const DEV_CONF: &str = include_str!("../tauri.dev.conf.json");
 const CAPABILITY: &str = include_str!("../capabilities/default.json");
 const PACKAGE_JSON: &str = include_str!("../../package.json");
+const BUILD_RS: &str = include_str!("../build.rs");
+const LIB_RS: &str = include_str!("lib.rs");
 
 fn json(text: &str) -> Value {
     serde_json::from_str(text).expect("JSON invalide")
@@ -77,8 +79,50 @@ fn la_capacite_n_accorde_que_les_permissions_revues() {
     // Toute nouvelle permission doit être ajoutée ici consciemment (politique : 04_SECURITE.md).
     let capability = json(CAPABILITY);
     assert_eq!(capability["windows"], serde_json::json!(["main"]));
-    assert_eq!(capability["permissions"], serde_json::json!(["allow-app-info"]));
+    assert_eq!(
+        capability["permissions"],
+        serde_json::json!([
+            "allow-app-info",
+            "allow-list-destinations",
+            "allow-list-inbox-items",
+            "allow-create-inbox-item"
+        ])
+    );
     assert!(capability.get("remote").is_none(), "aucun accès distant autorisé");
+}
+
+/// Noms entre guillemets dans le bloc `APP_COMMANDS` de build.rs.
+fn declared_commands() -> Vec<String> {
+    let start = BUILD_RS.find("APP_COMMANDS").expect("APP_COMMANDS absent de build.rs");
+    let block = &BUILD_RS[start..];
+    let block = &block[..block.find("];").expect("fin de APP_COMMANDS")];
+    block.split('"').skip(1).step_by(2).map(str::to_owned).collect()
+}
+
+#[test]
+fn chaque_commande_est_declaree_autorisee_et_enregistree() {
+    // Une commande doit figurer aux trois endroits ; sinon Tauri la refuse ou l'oublie.
+    let declared = declared_commands();
+    assert!(!declared.is_empty());
+
+    let allowed: Vec<String> = json(CAPABILITY)["permissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p.as_str().unwrap().to_owned())
+        .collect();
+    let expected: Vec<String> = declared
+        .iter()
+        .map(|c| format!("allow-{}", c.replace('_', "-")))
+        .collect();
+    assert_eq!(allowed, expected, "capacité et build.rs divergent");
+
+    for command in &declared {
+        assert!(
+            LIB_RS.contains(&format!("commands::{command},")),
+            "{command} absent de generate_handler! dans lib.rs"
+        );
+    }
 }
 
 #[test]
