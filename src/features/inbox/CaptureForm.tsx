@@ -1,9 +1,19 @@
-import { useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useId, useImperativeHandle, useRef, useState, type FormEvent, type KeyboardEvent, type Ref } from "react";
 import type { Destination } from "./api";
 import { DestinationOptions } from "./DestinationOptions";
 import "./CaptureForm.css";
 
+export interface CaptureFormHandle {
+  /** Du texte saisi n'a pas encore été envoyé. */
+  hasUnsent: () => boolean;
+  /** Replace le curseur dans le champ. */
+  focus: () => void;
+  /** Envoie la saisie ; `true` si elle est enregistrée (ou s'il n'y avait rien à envoyer). */
+  submit: () => Promise<boolean>;
+}
+
 interface CaptureFormProps {
+  ref?: Ref<CaptureFormHandle>;
   destinations: Destination[];
   /** Enregistre la capture ; rejette en cas d'échec (le texte est alors conservé). */
   onSubmit: (content: string, destinationId: string | null) => Promise<void>;
@@ -13,7 +23,8 @@ interface CaptureFormProps {
  * Capture rapide : Entrée envoie, Maj+Entrée va à la ligne.
  * Le champ n'est vidé qu'après un enregistrement confirmé.
  */
-export function CaptureForm({ destinations, onSubmit }: CaptureFormProps) {
+export function CaptureForm(props: CaptureFormProps) {
+  const { destinations, onSubmit } = props;
   const [text, setText] = useState("");
   const [destinationId, setDestinationId] = useState("");
   const [pending, setPending] = useState(false);
@@ -25,11 +36,24 @@ export function CaptureForm({ destinations, onSubmit }: CaptureFormProps) {
   const destinationFieldId = useId();
   const errorId = useId();
 
-  async function submit() {
-    if (inFlight.current) return;
+  // Un envoi en cours : toute nouvelle demande (ex. « Envoyer » à la fermeture) l'attend
+  // au lieu d'échouer ou de créer un doublon.
+  const running = useRef<Promise<boolean> | null>(null);
+
+  function submit(): Promise<boolean> {
+    if (running.current) return running.current;
+    const attempt = send().finally(() => {
+      running.current = null;
+    });
+    running.current = attempt;
+    return attempt;
+  }
+
+  async function send(): Promise<boolean> {
+    if (inFlight.current) return false;
     const sentText = text;
     const sentDestination = destinationId;
-    if (sentText.trim() === "") return;
+    if (sentText.trim() === "") return true;
 
     inFlight.current = true;
     setPending(true);
@@ -41,14 +65,22 @@ export function CaptureForm({ destinations, onSubmit }: CaptureFormProps) {
       setText((current) => (current === sentText ? "" : current));
       setDestinationId((current) => (current === sentDestination ? "" : current));
       textareaRef.current?.focus();
+      return true;
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "L'enregistrement a échoué.";
       setError(`${message} Votre texte est conservé : réessayez avec Entrée ou « Envoyer ».`);
+      return false;
     } finally {
       inFlight.current = false;
       setPending(false);
     }
   }
+
+  useImperativeHandle(props.ref, () => ({
+    hasUnsent: () => text.trim() !== "",
+    focus: () => textareaRef.current?.focus(),
+    submit,
+  }));
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     // Pendant la composition d'un caractère (accents via IME), Entrée ne valide pas.

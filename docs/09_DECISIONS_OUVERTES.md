@@ -38,6 +38,14 @@
 - **Nom de la base :** `morganiser.db`, dans le dossier `data` de l'environnement (Dev : `%LOCALAPPDATA%\com.morganiser.desktop.dev\data`). Mode WAL : fichiers auxiliaires `-wal`/`-shm` à traiter avec la base (voir fiche brique 001, section 7).
 - **Référence unique :** `docs/briques/BRIQUE_001_CAPTURE_RAPIDE.md` (la spécification V2 y a été fusionnée).
 
+### 2026-10-10 — Sous-brique 001-B (validées par le propriétaire)
+
+- **Fiche :** panneau latéral à droite à partir de 900 px (ajustable après essais), remplacement de la vue principale en dessous ; fiche directement éditable.
+- **Corbeille :** suppression logique **sans confirmation systématique**, notification « Annuler » d'environ 8 s, vue Corbeille permanente (survit au redémarrage) ; **aucune suppression définitive ni vidage automatique** en 001-B.
+- **Conflits :** verrouillage optimiste (`updated_at` attendu) vérifié atomiquement dans le `UPDATE`, `updated_at` strictement croissant, erreurs distinctes (introuvable / corbeille / conflit). Sans migration.
+- **« Voir tout » :** lots de 50, pagination par curseur `(date, id)`, plus anciennes ajoutées au-dessus.
+- **Choix d'implémentation à relire :** la mise à la corbeille et la restauration ne modifient pas `updated_at` (dernière modification du contenu) ; voir la fiche brique 001, section 12, pour l'impact sur la future synchronisation.
+
 ## À arbitrer avant le développement de la brique 001
 
 1. ~~Pile technologique Windows~~ → actée le 2026-10-08 (voir ci-dessus).

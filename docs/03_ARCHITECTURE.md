@@ -21,6 +21,7 @@ Environnements : voir `docs/briques/BRIQUE_000_FONDATIONS.md` (identifiants, dos
 Persistance (depuis 001-A) :
 - `src-tauri/src/storage/` : ouverture de la base, réglages (`foreign_keys`, WAL), migrations SQL versionnées (`src-tauri/migrations/NNNN_*.sql`, numéro dans `PRAGMA user_version`, une transaction par migration ; base plus récente que l'application refusée avant tout réglage, donc sans être modifiée).
 - Un module par domaine (`src-tauri/src/inbox.rs` pour « À organiser ») : validation, requêtes paramétrées, testé sur bases temporaires.
+- Listes paginées par curseur `(date, id)` ; modifications protégées par un verrou optimiste (`updated_at` attendu, vérifié dans le `UPDATE`) ;
 - Une seule connexion partagée, protégée par un verrou ; les commandes Tauri (`commands.rs`) ne font que relayer vers les modules de domaine.
 - Côté interface, une fonctionnalité regroupe ses composants et son unique module d'appel Rust (`src/features/<fonction>/`).
 

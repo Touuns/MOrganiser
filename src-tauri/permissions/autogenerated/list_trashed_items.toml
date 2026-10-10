@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-trashed-items"
+description = "Enables the list_trashed_items command without any pre-configured scope."
+commands.allow = ["list_trashed_items"]
+
+[[permission]]
+identifier = "deny-list-trashed-items"
+description = "Denies the list_trashed_items command without any pre-configured scope."
+commands.deny = ["list_trashed_items"]

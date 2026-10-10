@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-restore-inbox-item"
+description = "Enables the restore_inbox_item command without any pre-configured scope."
+commands.allow = ["restore_inbox_item"]
+
+[[permission]]
+identifier = "deny-restore-inbox-item"
+description = "Denies the restore_inbox_item command without any pre-configured scope."
+commands.deny = ["restore_inbox_item"]

@@ -85,7 +85,15 @@ fn la_capacite_n_accorde_que_les_permissions_revues() {
             "allow-app-info",
             "allow-list-destinations",
             "allow-list-inbox-items",
-            "allow-create-inbox-item"
+            "allow-create-inbox-item",
+            "allow-list-trashed-items",
+            "allow-get-inbox-item",
+            "allow-update-inbox-item",
+            "allow-trash-inbox-item",
+            "allow-restore-inbox-item",
+            "core:event:allow-listen",
+            "core:event:allow-unlisten",
+            "core:window:allow-destroy"
         ])
     );
     assert!(capability.get("remote").is_none(), "aucun accès distant autorisé");
@@ -111,11 +119,16 @@ fn chaque_commande_est_declaree_autorisee_et_enregistree() {
         .iter()
         .map(|p| p.as_str().unwrap().to_owned())
         .collect();
+    // Les permissions « core:… » (fermeture protégée) sont revues à part, ci-dessus.
+    let app_permissions: Vec<String> = allowed
+        .into_iter()
+        .filter(|p| !p.starts_with("core:"))
+        .collect();
     let expected: Vec<String> = declared
         .iter()
         .map(|c| format!("allow-{}", c.replace('_', "-")))
         .collect();
-    assert_eq!(allowed, expected, "capacité et build.rs divergent");
+    assert_eq!(app_permissions, expected, "capacité et build.rs divergent");
 
     for command in &declared {
         assert!(
