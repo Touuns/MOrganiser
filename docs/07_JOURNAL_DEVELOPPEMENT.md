@@ -185,6 +185,25 @@
 - **Tests :** 3 nouveaux (enregistrement long puis fermeture ; enregistrement qui échoue ; envoi long puis « Envoyer »). `pnpm typecheck` OK ; `pnpm test:ui` 71/71 ; Rust inchangé (69/69 au dernier passage complet).
 - **Limite :** une mise à la corbeille ou une restauration en cours n'est pas bloquante pour la fermeture (opération atomique côté Rust, sans brouillon à perdre).
 
+## 2026-10-10 — Brique 001-B : corrections après audit Codex de `d7edd22`
+
+- **Contexte :** audit en lecture seule, 6 défauts avérés (4 élevés) de coordination asynchrone ; publication suspendue. Aucun commit correctif avant validation.
+- **Méthode :** 15 tests déterministes à promesses différées écrits **avant** les corrections (`InboxHome.async.test.tsx`) : 11 échouaient sur `d7edd22`, 4 étaient des garde-fous.
+- **Défauts, causes et corrections :** voir la fiche brique 001, section « Coordination des opérations asynchrones ». Cause commune : décisions prises sur l'état d'un rendu périmé (closure) et résultats d'opérations non rattachés à leur capture d'origine.
+- **Deux défauts supplémentaires trouvés pendant la correction :** (1) juste après un enregistrement réussi, `hasUnsaved()` lisait encore l'ancien rendu et ré-affichait l'avertissement ; même défaut côté capture rapide (`hasUnsent()`) → modèle immédiat par références ; (2) un avertissement « texte non envoyé » devenait périmé si l'envoi aboutissait pendant son affichage → la fermeture reprend (`onSent`).
+- **Tests :** `pnpm typecheck` OK ; interface 86/86 (+15) ; Rust 69/69 (+1 ignoré, inchangé) ; `pnpm audit` : aucune vulnérabilité.
+- **Fenêtre Dev réelle, retards créés par un verrou SQLite (3,5 s) :** 24 vérifications sur 24 :
+  - A : saisie B conservée, A en base, B s'enregistre ensuite sans conflit ;
+  - B : × pendant l'envoi → avertissement, « Envoyer » puis « Continuer à écrire » → fenêtre ouverte, capture enregistrée une seule fois ;
+  - C : corbeille de A différée pendant l'ouverture de B → fiche et brouillon de B intacts, notification affichée, brouillon protégé à la fermeture ;
+  - D : capture supprimée ailleurs → brouillon conservé, fermeture suspendue, restauration en gardant le brouillon ;
+  - E : enregistrer puis corbeille → texte enregistré et capture à la corbeille ;
+  - F : restauration depuis la liste → fiche modifiable, titre et commandes cohérents ;
+  - G : × pendant une corbeille bloquée → la fenêtre attend, puis se ferme (2,6 s), mise à la corbeille aboutie.
+- **SQLite :** `integrity_check` ok, aucune violation de clé étrangère, schéma v1, aucun doublon ; `-wal` vide après fermeture. Dossier Stable : absent.
+- **Fichiers modifiés :** `CaptureDetail.tsx`, `CaptureForm.tsx`, `InboxHome.tsx`, nouveau `InboxHome.async.test.tsx`, fiche brique 001, journal.
+- **Limites :** voir la fiche (arrêt forcé, coupure de courant). **Validation du propriétaire :** en attente ; commit correctif non créé.
+
 ## Modèle à recopier après chaque brique
 
 ### AAAA-MM-JJ — Brique XXX : [nom]

@@ -17,6 +17,8 @@ interface CaptureFormProps {
   destinations: Destination[];
   /** Enregistre la capture ; rejette en cas d'échec (le texte est alors conservé). */
   onSubmit: (content: string, destinationId: string | null) => Promise<void>;
+  /** Appelé après un envoi réussi, une fois le champ vidé (s'il n'a pas été modifié entre-temps). */
+  onSent?: () => void;
 }
 
 /**
@@ -25,8 +27,19 @@ interface CaptureFormProps {
  */
 export function CaptureForm(props: CaptureFormProps) {
   const { destinations, onSubmit } = props;
-  const [text, setText] = useState("");
-  const [destinationId, setDestinationId] = useState("");
+  const [text, setTextState] = useState("");
+  const [destinationId, setDestinationState] = useState("");
+  // Valeurs immédiates : lisibles par une demande de fermeture ou une réponse tardive avant le
+  // prochain rendu (sinon un texte déjà envoyé paraîtrait encore « non envoyé »).
+  const draft = useRef({ text: "", destinationId: "" });
+  function setText(next: string) {
+    draft.current.text = next;
+    setTextState(next);
+  }
+  function setDestinationId(next: string) {
+    draft.current.destinationId = next;
+    setDestinationState(next);
+  }
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Verrou synchrone : bloque un second envoi avant même le prochain rendu.
@@ -51,8 +64,8 @@ export function CaptureForm(props: CaptureFormProps) {
 
   async function send(): Promise<boolean> {
     if (inFlight.current) return false;
-    const sentText = text;
-    const sentDestination = destinationId;
+    const sentText = draft.current.text;
+    const sentDestination = draft.current.destinationId;
     if (sentText.trim() === "") return true;
 
     inFlight.current = true;
@@ -62,9 +75,10 @@ export function CaptureForm(props: CaptureFormProps) {
       await onSubmit(sentText, sentDestination === "" ? null : sentDestination);
       // Ne vider que si rien n'a été modifié pendant l'envoi : une saisie faite
       // entre-temps n'est jamais perdue.
-      setText((current) => (current === sentText ? "" : current));
-      setDestinationId((current) => (current === sentDestination ? "" : current));
+      if (draft.current.text === sentText) setText("");
+      if (draft.current.destinationId === sentDestination) setDestinationId("");
       textareaRef.current?.focus();
+      props.onSent?.();
       return true;
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "L'enregistrement a échoué.";
@@ -77,7 +91,7 @@ export function CaptureForm(props: CaptureFormProps) {
   }
 
   useImperativeHandle(props.ref, () => ({
-    hasUnsent: () => text.trim() !== "",
+    hasUnsent: () => draft.current.text.trim() !== "",
     focus: () => textareaRef.current?.focus(),
     submit,
   }));

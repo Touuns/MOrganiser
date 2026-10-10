@@ -25,6 +25,15 @@ export const HOME_LIMIT = 20;
 type View = "home" | "all" | "trash";
 type Status = { kind: "ok" | "error"; text: string } | null;
 
+/** Une demande de fermeture de la fenêtre : annulable, et réexaminée à chaque étape. */
+interface CloseRequest {
+  cancelled: boolean;
+  /** L'utilisateur a choisi d'abandonner ce brouillon pour cette fermeture. */
+  skipDetail: boolean;
+  skipForm: boolean;
+  closeWindow: () => void;
+}
+
 /**
  * Accueil de la brique 001 : boîte « À organiser » au-dessus de la capture rapide, fiche
  * d'une capture à droite (ou plein écran en fenêtre étroite), « Voir tout » et corbeille.
@@ -48,8 +57,30 @@ export function InboxHome() {
   const detailRef = useRef<CaptureDetailHandle>(null);
   const formRef = useRef<CaptureFormHandle>(null);
   // Fermeture de la fenêtre suspendue par du texte non envoyé dans la capture rapide.
-  const [closePrompt, setClosePrompt] = useState<{ closeWindow: () => void; error: string | null; sending: boolean } | null>(null);
+  const [closePrompt, setClosePrompt] = useState<{
+    request: CloseRequest;
+    error: string | null;
+    sending: boolean;
+  } | null>(null);
+  const closePromptRef = useRef<typeof closePrompt>(null);
+  function setPrompt(next: typeof closePrompt) {
+    closePromptRef.current = next;
+    setClosePrompt(next);
+  }
   const opener = useRef<HTMLElement | null>(null);
+  // Demande de fermeture en cours (une nouvelle demande annule la précédente).
+  const closeRequest = useRef<CloseRequest | null>(null);
+  // Écritures en cours (enregistrement, corbeille, restauration, envoi) : la fermeture les attend.
+  const operations = useRef(new Set<Promise<unknown>>());
+  const track = useCallback(<T,>(operation: Promise<T>): Promise<T> => {
+    operations.current.add(operation);
+    const done = () => void operations.current.delete(operation);
+    operation.then(done, done);
+    return operation;
+  }, []);
+  // Fiche actuellement ouverte, lisible par les réponses tardives (jamais une closure périmée).
+  const selectedRef = useRef<InboxItem | null>(null);
+  selectedRef.current = selected;
 
   const refresh = useCallback(async (current: InboxFilter) => {
     const request = ++lastRequest.current;
@@ -83,30 +114,67 @@ export function InboxHome() {
 
   const changed = () => setVersion((v) => v + 1);
 
-  // Fermeture normale de la fenêtre : on propose d'abord d'enregistrer la fiche modifiée,
-  // puis d'envoyer le texte de la capture rapide. « Continuer » à une étape annule tout.
+  // Fermeture normale de la fenêtre. On examine l'état ACTUEL des brouillons : la fiche
+  // d'abord, puis la capture rapide, puis les écritures en cours. Chaque décision relance
+  // l'examen (un nouveau texte saisi entre-temps est donc proposé à son tour), et
+  // « Continuer » à n'importe quelle étape annule la demande, y compris si une opération
+  // précédente n'a pas encore répondu.
+  async function advanceClose(request: CloseRequest) {
+    for (;;) {
+      if (request.cancelled) return;
+      if (!request.skipDetail && detailRef.current?.hasUnsaved()) {
+        detailRef.current.requestLeave(
+          (outcome) => {
+            if (outcome === "discarded") request.skipDetail = true;
+            void advanceClose(request);
+          },
+          () => {
+            request.cancelled = true;
+          },
+        );
+        return;
+      }
+      if (!request.skipForm && formRef.current?.hasUnsent()) {
+        setPrompt({ request, error: null, sending: false });
+        return;
+      }
+      // Plus rien à proposer : on attend les écritures encore en transit (corbeille,
+      // restauration, enregistrement…), puis on réexamine l'état avant de détruire.
+      if (operations.current.size > 0) {
+        await Promise.allSettled([...operations.current]);
+        continue;
+      }
+      request.cancelled = true; // une seule destruction par demande
+      request.closeWindow();
+      return;
+    }
+  }
+
   useCloseGuard(
-    () => Boolean(detailRef.current?.hasUnsaved() || formRef.current?.hasUnsent()),
+    () =>
+      Boolean(
+        detailRef.current?.hasUnsaved() || formRef.current?.hasUnsent() || operations.current.size > 0,
+      ),
     (closeWindow) => {
-      const checkCapture = () => {
-        if (formRef.current?.hasUnsent()) setClosePrompt({ closeWindow, error: null, sending: false });
-        else closeWindow();
-      };
-      if (detailRef.current?.hasUnsaved()) detailRef.current.requestLeave(checkCapture);
-      else checkCapture();
+      if (closeRequest.current) closeRequest.current.cancelled = true;
+      setPrompt(null);
+      const request: CloseRequest = { cancelled: false, skipDetail: false, skipForm: false, closeWindow };
+      closeRequest.current = request;
+      void advanceClose(request);
     },
   );
 
   async function sendBeforeClosing() {
     const prompt = closePrompt;
     if (!prompt || !formRef.current) return;
-    setClosePrompt({ ...prompt, error: null, sending: true });
+    setPrompt({ ...prompt, error: null, sending: true });
     const sent = await formRef.current.submit();
+    if (prompt.request.cancelled) return; // « Continuer » a été choisi pendant l'attente
     if (sent) {
-      setClosePrompt(null);
-      prompt.closeWindow();
+      setPrompt(null);
+      void advanceClose(prompt.request); // réexamine : rien n'est détruit « à l'aveugle »
     } else {
-      setClosePrompt({
+      setPrompt({
         ...prompt,
         sending: false,
         error: "L'envoi a échoué : votre texte est conservé et la fenêtre reste ouverte.",
@@ -116,7 +184,7 @@ export function InboxHome() {
 
   /** Exécute `action` après avoir proposé d'enregistrer un brouillon non enregistré. */
   function guard(action: () => void) {
-    if (detailRef.current) detailRef.current.requestLeave(action);
+    if (detailRef.current) detailRef.current.requestLeave(() => action());
     else action();
   }
 
@@ -145,7 +213,7 @@ export function InboxHome() {
   }
 
   async function handleCapture(content: string, destinationId: string | null) {
-    const created = await createInboxItem(content, destinationId); // rejette → texte conservé
+    const created = await track(createInboxItem(content, destinationId)); // rejette → texte conservé
     const visible =
       filter.type === "all" ||
       (filter.type === "unclassified" && created.destinationId === null) ||
@@ -157,11 +225,17 @@ export function InboxHome() {
     changed();
   }
 
+  /** La capture `id` a changé d'état hors de sa fiche : si cette fiche est ouverte, on la relit. */
+  function refreshOpenSheet(id: string) {
+    if (selectedRef.current?.id === id) void detailRef.current?.refresh();
+  }
+
   async function undoTrash(itemId: string) {
     setToast(null);
     try {
-      await restoreInboxItem(itemId);
+      await track(restoreInboxItem(itemId));
       setStatus({ kind: "ok", text: "Capture restaurée." });
+      refreshOpenSheet(itemId);
       changed();
     } catch (error) {
       const message = error instanceof Error ? error.message : "La restauration a échoué.";
@@ -171,9 +245,9 @@ export function InboxHome() {
 
   async function restoreFromTrash(item: InboxItem) {
     try {
-      const restored = await restoreInboxItem(item.id);
+      const restored = await track(restoreInboxItem(item.id));
       setStatus({ kind: "ok", text: "Capture restaurée." });
-      if (selected?.id === restored.id) setSelected(restored);
+      refreshOpenSheet(restored.id); // la fiche ouverte suit l'état réel ; son brouillon est conservé
       changed();
     } catch (error) {
       const message = error instanceof Error ? error.message : "La restauration a échoué.";
@@ -197,12 +271,13 @@ export function InboxHome() {
             error={closePrompt.error}
             onSave={() => void sendBeforeClosing()}
             onDiscard={() => {
-              const { closeWindow } = closePrompt;
-              setClosePrompt(null);
-              closeWindow();
+              closePrompt.request.skipForm = true;
+              setPrompt(null);
+              void advanceClose(closePrompt.request);
             }}
             onKeep={() => {
-              setClosePrompt(null);
+              closePrompt.request.cancelled = true;
+              setPrompt(null);
               formRef.current?.focus();
             }}
           />
@@ -257,7 +332,19 @@ export function InboxHome() {
             )}
           />
         )}
-        <CaptureForm ref={formRef} destinations={destinations} onSubmit={handleCapture} />
+        <CaptureForm
+          ref={formRef}
+          destinations={destinations}
+          onSubmit={handleCapture}
+          onSent={() => {
+            // L'avertissement « texte non envoyé » est périmé : la fermeture demandée reprend.
+            const prompt = closePromptRef.current;
+            if (prompt && !prompt.request.cancelled && !formRef.current?.hasUnsent()) {
+              setPrompt(null);
+              void advanceClose(prompt.request);
+            }
+          }}
+        />
         <div className="inbox-home__feedback">
           <p
             className={status?.kind === "error" ? "inbox-home__status inbox-home__status--error" : "inbox-home__status"}
@@ -289,8 +376,12 @@ export function InboxHome() {
               setStatus({ kind: "ok", text: "Modifications enregistrées." });
               changed();
             }}
-            onTrashed={(item) => {
-              closeDetail();
+            track={track}
+            onTrashed={(item, closeSheet) => {
+              // Le résultat concerne la capture `item` : il ne ferme que SA fiche, et seulement
+              // si elle est toujours ouverte et sans saisie récente. Jamais une autre fiche.
+              if (closeSheet && selectedRef.current?.id === item.id) closeDetail();
+              else refreshOpenSheet(item.id);
               setToast({ id: Date.now(), itemId: item.id });
               setStatus(null);
               changed();

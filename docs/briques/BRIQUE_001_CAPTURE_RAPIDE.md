@@ -234,7 +234,7 @@ Chaque sous-étape est validée par le propriétaire avant la suivante ; ce ne s
 ### Tests
 
 - Rust : 69 (+1 sous-processus ignoré) ; **22 nouveaux** : modification et dates, horloge figée, deux modifications à la même milliseconde, garde atomique du `UPDATE`, introuvable/corbeille/conflit, texte vide ou trop long, destination archivée inchangée, corbeille et restauration à l'identique, tri de la corbeille, pagination sans doublon à dates égales, ajouts pendant la pagination, filtres, persistance après réouverture, échecs d'écriture, format JSON.
-- Interface : 71 (dont 46 nouveaux : fiche, édition, annulation, avertissements, échec, conflit, corbeille, restauration, notification, lots de 50, défilement, filtres, ajouts pendant la consultation).
+- Interface : 86 (dont 61 nouveaux : fiche, édition, annulation, avertissements, échec, conflit, corbeille, restauration, notification, lots de 50, défilement, filtres, ajouts pendant la consultation).
 
 ### Limites connues
 
@@ -260,3 +260,20 @@ La fermeture **normale** (bouton `×`, `Alt+F4`, fermeture depuis la barre des t
 - **Fermeture pendant un enregistrement en cours :** la fenêtre n'est jamais détruite avant la décision. Une fiche en cours d'enregistrement est encore « non enregistrée » : l'avertissement s'affiche, puis la fermeture a lieu automatiquement, une seule fois, quand l'enregistrement réussit ; s'il échoue, fenêtre et brouillon sont conservés. Dans la capture rapide, « Envoyer » attend l'envoi en cours (pas de doublon, pas de faux échec). SQLite étant transactionnel, une écriture est soit complète, soit absente.
 - **Limite :** la protection ne concerne que la fermeture normale. Un arrêt forcé du processus (Gestionnaire des tâches, `Ctrl+C` dans le terminal de développement), l'extinction de Windows ou une coupure de courant ne sont pas interceptables ; les captures **déjà enregistrées** restent protégées par SQLite (WAL, `synchronous = FULL`), seul un brouillon non enregistré peut être perdu.
 - **Notification d'annulation :** elle recouvre désormais la ligne d'état, dans un emplacement réservé : le champ de capture ne bouge plus (mesuré : 0 px de décalage).
+
+### Coordination des opérations asynchrones (correction après audit Codex, 2026-10-10)
+
+Principe : trois notions distinctes dans la fiche : la **référence enregistrée** (`baseline`), le **brouillon** (texte et destination) et les **opérations en cours**. Un modèle « immédiat » (références mises à jour au même instant que l'état React) permet à une réponse tardive ou à une demande de fermeture de lire l'état réel, jamais celui d'un rendu périmé.
+
+| # | Défaut | Règle appliquée |
+|---|---|---|
+| A | La réponse tardive d'un enregistrement remplaçait la saisie suivante | La référence passe à la version enregistrée ; le brouillon n'est remplacé que s'il n'a pas changé depuis l'envoi. Le départ en attente n'a lieu que si plus rien n'est non enregistré. |
+| B | Une fermeture différée aboutissait malgré une nouvelle saisie ou « Continuer à écrire » | Chaque demande de fermeture est un objet annulable ; chaque décision relance l'examen de l'état ACTUEL (fiche, capture rapide, écritures en cours) avant toute destruction ; une nouvelle demande annule la précédente ; l'avertissement périmé reprend la fermeture dès que l'envoi a abouti. |
+| C | La corbeille de A fermait la fiche B | Le résultat porte l'identifiant de A : il ne ferme que la fiche de A, si elle est encore ouverte et sans saisie récente ; sinon notification seule. Une saisie faite pendant l'attente est conservée. |
+| D | Un brouillon n'était plus protégé quand la capture était supprimée ailleurs | `hasUnsaved()` = divergence du brouillon, indépendamment du droit d'enregistrer. « Enregistrer » explique qu'il faut d'abord restaurer ; « Annuler les modifications » est proposé aussi dans la fiche d'une capture supprimée. |
+| E | « Enregistrer puis corbeille » ne mettait pas à la corbeille | L'action enchaînée est lancée après la libération effective du verrou, et seulement si l'enregistrement a réussi. |
+| F | La fiche restait « supprimée » après une restauration depuis la liste | La fiche ouverte de la capture est relue (`refresh()`) ; son brouillon n'est pas touché. |
+
+**Fermeture pendant une corbeille, une restauration ou un envoi :** toutes les écritures sont suivies (`track`). La fermeture normale les attend (aucune demande en transit n'est interrompue), puis réexamine l'état avant de détruire la fenêtre. Pas de gestionnaire global : un simple ensemble de promesses.
+
+**Limites :** un arrêt forcé du processus, l'extinction de Windows ou une coupure de courant restent hors de portée (voir ci-dessus). Quand une fermeture normale attend une écriture bloquée, la fenêtre reste ouverte au plus le délai d'attente SQLite (5 s) puis le résultat est traité comme n'importe quelle réponse.

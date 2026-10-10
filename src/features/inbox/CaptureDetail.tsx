@@ -21,14 +21,23 @@ import { DestinationOptions } from "./DestinationOptions";
 import { formatLong } from "./format";
 import "./CaptureDetail.css";
 
+/** Issue d'une demande de départ : rien à perdre, brouillon enregistré, ou abandonné. */
+export type LeaveOutcome = "clean" | "saved" | "discarded";
+
 export interface CaptureDetailHandle {
-  /** Des modifications non enregistrées existent (et la capture est modifiable). */
+  /**
+   * Un brouillon diverge de la version enregistrée. Indépendant du droit d'enregistrer :
+   * un texte reste protégé même si la capture a été supprimée ailleurs.
+   */
   hasUnsaved: () => boolean;
   /**
-   * Demande à quitter la fiche (ou à changer de capture) : exécute `proceed` tout de suite
-   * s'il n'y a rien à perdre, sinon propose d'enregistrer, d'abandonner ou de continuer.
+   * Demande à quitter la fiche (autre capture, autre vue, fermeture de la fenêtre) :
+   * `proceed` est appelé tout de suite s'il n'y a rien à perdre, sinon après le choix de
+   * l'utilisateur ; `cancel` s'il choisit de continuer à modifier.
    */
-  requestLeave: (proceed: () => void) => void;
+  requestLeave: (proceed: (outcome: LeaveOutcome) => void, cancel?: () => void) => void;
+  /** Relit l'état de la capture (ex. restaurée depuis la liste) sans toucher au brouillon. */
+  refresh: () => Promise<void>;
 }
 
 interface CaptureDetailProps {
@@ -36,32 +45,49 @@ interface CaptureDetailProps {
   destinations: Destination[];
   onClose: () => void;
   onSaved: (item: InboxItem) => void;
-  onTrashed: (item: InboxItem) => void;
+  /** `closeSheet` : la fiche d'origine est toujours ouverte, sans saisie récente : elle peut se fermer. */
+  onTrashed: (item: InboxItem, closeSheet: boolean) => void;
   onRestored: (item: InboxItem) => void;
+  /** Déclare une opération d'écriture en cours (la fermeture de la fenêtre l'attend). */
+  track: <T>(operation: Promise<T>) => Promise<T>;
   ref?: Ref<CaptureDetailHandle>;
 }
 
 type Busy = "save" | "trash" | "restore" | null;
+interface PendingLeave {
+  proceed: (outcome: LeaveOutcome) => void;
+  cancel?: () => void;
+}
 
 /**
- * Fiche d'une capture : texte et destination directement modifiables. Le brouillon n'est
- * jamais perdu silencieusement : échec d'écriture, conflit ou fermeture le conservent.
- * À remonter avec `key={item.id}` pour changer de capture.
+ * Fiche d'une capture : texte et destination directement modifiables.
+ *
+ * Trois notions distinctes : la **référence enregistrée** (`baseline`), le **brouillon**
+ * (`text`, `destinationId`) et les **opérations en cours** (`inFlight`). Une réponse
+ * tardive met à jour la référence ; elle ne touche au brouillon que s'il n'a pas changé
+ * depuis l'envoi. À remonter avec `key={item.id}` pour changer de capture.
  */
 export function CaptureDetail(props: CaptureDetailProps) {
-  const { item, destinations, onClose, onSaved, onTrashed, onRestored } = props;
-  const [baseline, setBaseline] = useState(item);
-  const [text, setText] = useState(item.content);
-  const [destinationId, setDestinationId] = useState(item.destinationId ?? "");
+  const { item, destinations, onClose, onSaved, onTrashed, onRestored, track } = props;
+  const [baseline, setBaselineState] = useState(item);
+  const [text, setTextState] = useState(item.content);
+  const [destinationId, setDestinationState] = useState(item.destinationId ?? "");
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [gone, setGone] = useState(false);
-  const [leave, setLeave] = useState<{ proceed: () => void } | null>(null);
+  const [goneState, setGoneState] = useState(false);
+  const [leave, setLeaveState] = useState<PendingLeave | null>(null);
   const inFlight = useRef(false);
-  // Départ en attente (fermeture, autre capture) : exécuté une seule fois, dès que le brouillon est sûr.
-  const leaveRef = useRef<{ proceed: () => void } | null>(null);
-  leaveRef.current = leave;
+  const mounted = useRef(true);
+  // Modèle « source de vérité immédiate » : mis à jour au même instant que l'état React, donc
+  // lisible par une réponse tardive ou une demande de fermeture avant le prochain rendu.
+  const model = useRef({
+    baseline: item,
+    text: item.content,
+    destinationId: item.destinationId ?? "",
+    gone: false,
+    leave: null as PendingLeave | null,
+  });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const headingId = useId();
@@ -69,17 +95,51 @@ export function CaptureDetail(props: CaptureDetailProps) {
   const destinationFieldId = useId();
   const errorId = useId();
 
+  function setBaseline(next: InboxItem) {
+    model.current.baseline = next;
+    setBaselineState(next);
+  }
+  function setDraft(nextText: string, nextDestination: string) {
+    model.current.text = nextText;
+    model.current.destinationId = nextDestination;
+    setTextState(nextText);
+    setDestinationState(nextDestination);
+  }
+  function setGone(next: boolean) {
+    model.current.gone = next;
+    setGoneState(next);
+  }
+  function setLeave(next: PendingLeave | null) {
+    model.current.leave = next;
+    setLeaveState(next);
+  }
+  /** Le brouillon diverge de la référence enregistrée (état immédiat, pas celui du rendu). */
+  const isDirty = () =>
+    model.current.text !== model.current.baseline.content ||
+    model.current.destinationId !== (model.current.baseline.destinationId ?? "");
+
   const trashed = baseline.deletedAt !== null;
   const dirty = text !== baseline.content || destinationId !== (baseline.destinationId ?? "");
-  const editable = !trashed && !gone;
+  const editable = !trashed && !goneState;
 
   useImperativeHandle(props.ref, () => ({
-    hasUnsaved: () => dirty && editable,
-    requestLeave(proceed) {
-      if (dirty) setLeave({ proceed });
-      else proceed();
+    hasUnsaved: () => isDirty(),
+    requestLeave(proceed, cancel) {
+      if (isDirty()) setLeave({ proceed, cancel });
+      else proceed("clean");
+    },
+    refresh: async () => {
+      const fresh = await refreshBaseline();
+      if (fresh) setGone(false);
     },
   }));
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
 
   // À l'ouverture : le texte (modifiable) ou le titre (corbeille, lecture seule).
   useEffect(() => {
@@ -89,54 +149,80 @@ export function CaptureDetail(props: CaptureDetailProps) {
 
   async function refreshBaseline() {
     try {
-      const latest = await getInboxItem(baseline.id);
-      setBaseline(latest);
-      return latest;
+      const fresh = await getInboxItem(model.current.baseline.id);
+      setBaseline(fresh);
+      return fresh;
     } catch {
       return null;
     }
   }
 
+  /** Le départ en attente a lieu une seule fois, quand le brouillon est sûr. */
+  function finishLeave(outcome: LeaveOutcome) {
+    const pending = model.current.leave;
+    if (!pending) return;
+    setLeave(null);
+    pending.proceed(outcome);
+  }
+
+  function dismissLeave() {
+    const pending = model.current.leave;
+    setLeave(null);
+    pending?.cancel?.();
+  }
+
+  /** `true` si plus rien n'est à perdre (enregistré, ou rien à enregistrer). */
   async function save(): Promise<boolean> {
-    if (inFlight.current || !editable) return false;
-    if (!dirty) return true;
-    if (text.trim() === "") {
+    if (inFlight.current) return false;
+    const current = model.current;
+    if (current.baseline.deletedAt !== null || current.gone) {
+      setNotice(
+        current.gone
+          ? "Cette capture n'existe plus : vos modifications ne peuvent pas être enregistrées."
+          : "Cette capture est dans la corbeille : restaurez-la pour enregistrer vos modifications.",
+      );
+      return false;
+    }
+    if (!isDirty()) return true;
+    if (current.text.trim() === "") {
       setError("Le texte ne peut pas être vide.");
       return false;
     }
+    const sent = { text: current.text, destinationId: current.destinationId };
+    const version = current.baseline;
     inFlight.current = true;
     setBusy("save");
     setError(null);
     setNotice(null);
+    let safe = false;
     try {
-      const saved = await updateInboxItem(
-        baseline.id,
-        text,
-        destinationId === "" ? null : destinationId,
-        baseline.updatedAt,
+      const saved = await track(
+        updateInboxItem(
+          version.id,
+          sent.text,
+          sent.destinationId === "" ? null : sent.destinationId,
+          version.updatedAt,
+        ),
       );
+      // La référence passe à la version enregistrée. Le brouillon n'est remplacé que s'il
+      // n'a pas changé depuis l'envoi : une saisie faite pendant l'attente reste visible.
+      const now = model.current;
       setBaseline(saved);
-      setText(saved.content);
-      setDestinationId(saved.destinationId ?? "");
+      setDraft(
+        now.text === sent.text ? saved.content : now.text,
+        now.destinationId === sent.destinationId ? (saved.destinationId ?? "") : now.destinationId,
+      );
+      safe = !isDirty();
       onSaved(saved);
-      finishLeave();
-      return true;
     } catch (cause) {
       await explainSaveFailure(cause);
-      return false;
     } finally {
       inFlight.current = false;
       setBusy(null);
     }
-  }
-
-  /** Le brouillon est enregistré : le départ demandé peut avoir lieu (une seule fois). */
-  function finishLeave() {
-    const pending = leaveRef.current;
-    if (!pending) return;
-    leaveRef.current = null;
-    setLeave(null);
-    pending.proceed();
+    // Après la libération du verrou : l'action enchaînée (ex. corbeille) peut s'exécuter.
+    if (safe) finishLeave("saved");
+    return safe;
   }
 
   async function explainSaveFailure(cause: unknown) {
@@ -162,12 +248,23 @@ export function CaptureDetail(props: CaptureDetailProps) {
   }
 
   async function trash() {
-    if (inFlight.current || !editable) return;
+    if (inFlight.current || model.current.baseline.deletedAt !== null || model.current.gone) return;
     inFlight.current = true;
     setBusy("trash");
     setError(null);
+    // Brouillon au départ : seule une saisie faite PENDANT l'attente est à conserver
+    // (un brouillon explicitement abandonné avant ne l'est pas).
+    const start = { text: model.current.text, destinationId: model.current.destinationId };
     try {
-      onTrashed(await trashInboxItem(baseline.id));
+      const trashedItem = await track(trashInboxItem(model.current.baseline.id));
+      setBaseline(trashedItem);
+      const now = model.current;
+      const typedMeanwhile = now.text !== start.text || now.destinationId !== start.destinationId;
+      if (typedMeanwhile) {
+        setNotice("Cette capture a été mise à la corbeille. Votre nouveau texte est conservé.");
+      }
+      // La fiche ne se ferme que si elle est toujours là et sans saisie récente.
+      onTrashed(trashedItem, mounted.current && !typedMeanwhile);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "La mise à la corbeille a échoué.";
       setError(`${message} La capture n'a pas été déplacée.`);
@@ -183,8 +280,9 @@ export function CaptureDetail(props: CaptureDetailProps) {
     setBusy("restore");
     setError(null);
     try {
-      const restored = await restoreInboxItem(baseline.id);
-      setBaseline(restored);
+      const restored = await track(restoreInboxItem(model.current.baseline.id));
+      setBaseline(restored); // le brouillon éventuel reste tel quel
+      setGone(false);
       onRestored(restored);
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "La restauration a échoué.";
@@ -196,37 +294,37 @@ export function CaptureDetail(props: CaptureDetailProps) {
   }
 
   function revert() {
-    setText(baseline.content);
-    setDestinationId(baseline.destinationId ?? "");
+    dismissLeave(); // l'utilisateur reprend la main : tout départ en attente est annulé
+    setDraft(model.current.baseline.content, model.current.baseline.destinationId ?? "");
     setError(null);
     setNotice(null);
   }
 
+  function askLeave(proceed: (outcome: LeaveOutcome) => void) {
+    if (isDirty()) setLeave({ proceed });
+    else proceed("clean");
+  }
+
   function decide(choice: "save" | "discard" | "keep") {
-    const pending = leave;
-    if (!pending) return;
+    if (!model.current.leave) return;
     if (choice === "keep") {
-      setLeave(null);
+      dismissLeave();
       // Le bouton disparaît : on rend le focus au texte, pour poursuivre au clavier.
       textareaRef.current?.focus();
     } else if (choice === "discard") {
-      setLeave(null);
-      pending.proceed();
+      finishLeave("discarded");
     } else {
-      // Si un enregistrement est déjà en cours, `save()` répond non : `finishLeave`
-      // s'exécutera à sa fin. Sinon on enchaîne ici (idempotent).
-      void save().then((ok) => {
-        if (ok) finishLeave();
-      });
+      // Enregistrement déjà en cours : `save()` répond non et le départ aura lieu à sa fin,
+      // si aucun nouveau brouillon ne subsiste.
+      void save();
     }
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLElement>) {
     if (event.key === "Escape") {
       event.stopPropagation();
-      if (leave) setLeave(null);
-      else if (dirty) setLeave({ proceed: onClose });
-      else onClose();
+      if (model.current.leave) dismissLeave();
+      else askLeave(onClose);
     }
   }
 
@@ -252,7 +350,7 @@ export function CaptureDetail(props: CaptureDetailProps) {
         <button
           type="button"
           className="detail__close"
-          onClick={() => (dirty ? setLeave({ proceed: onClose }) : onClose())}
+          onClick={() => askLeave(onClose)}
         >
           <span className="detail__close-wide" aria-hidden="true">
             ✕
@@ -290,7 +388,7 @@ export function CaptureDetail(props: CaptureDetailProps) {
           id={textId}
           ref={textareaRef}
           value={text}
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => setDraft(event.target.value, model.current.destinationId)}
           onKeyDown={handleTextKeyDown}
           readOnly={!editable}
           maxLength={10000}
@@ -305,7 +403,7 @@ export function CaptureDetail(props: CaptureDetailProps) {
         <select
           id={destinationFieldId}
           value={destinationId}
-          onChange={(event) => setDestinationId(event.target.value)}
+          onChange={(event) => setDraft(model.current.text, event.target.value)}
           disabled={!editable}
         >
           <option value="">Aucune</option>
@@ -339,16 +437,23 @@ export function CaptureDetail(props: CaptureDetailProps) {
 
       <div className="detail__actions">
         {trashed ? (
-          <button type="button" className="detail__primary" onClick={() => void restore()} disabled={busy !== null}>
-            {busy === "restore" ? "Restauration…" : "Restaurer"}
-          </button>
+          <>
+            <button type="button" className="detail__primary" onClick={() => void restore()} disabled={busy !== null}>
+              {busy === "restore" ? "Restauration…" : "Restaurer"}
+            </button>
+            {dirty && (
+              <button type="button" onClick={revert} disabled={busy !== null}>
+                Annuler les modifications
+              </button>
+            )}
+          </>
         ) : (
           <>
             <button
               type="button"
               className="detail__primary"
               onClick={() => void save()}
-              disabled={!dirty || busy !== null || text.trim() === "" || gone}
+              disabled={!dirty || busy !== null || text.trim() === "" || goneState}
               aria-busy={busy === "save"}
             >
               {busy === "save" ? "Enregistrement…" : "Enregistrer"}
@@ -359,8 +464,8 @@ export function CaptureDetail(props: CaptureDetailProps) {
             <button
               type="button"
               className="detail__danger"
-              onClick={() => (dirty ? setLeave({ proceed: () => void trash() }) : void trash())}
-              disabled={busy !== null || gone}
+              onClick={() => askLeave(() => void trash())}
+              disabled={busy !== null || goneState}
             >
               Mettre à la corbeille
             </button>
