@@ -478,7 +478,7 @@ export function InboxHome() {
         {toast && (
           <UndoToast
             key={toast.id}
-            message="Capture déplacée dans la corbeille."
+            message="Déplacée dans la corbeille"
             actionLabel="Annuler"
             onAction={() => void undoTrash(toast.itemId)}
             onDismiss={() => setToast(null)}

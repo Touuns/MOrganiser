@@ -249,6 +249,21 @@
 - **Données :** les captures « Dép … » de test restent dans la base Dev (pas de nettoyage, sur instruction).
 - **Validation du propriétaire :** en attente.
 
+## 2026-10-10 — Brique 001-C : carte laissée invisible après la transition de sortie (revue de `1cb3487`)
+
+- **Défaut (reproduit) :** `playDeparture` masquait la carte (`visibility: hidden`) sans jamais la rétablir à la fin ou à l'annulation ; si la liste ne la retirait pas (relecture en échec ou tardive), elle restait dans le DOM, invisible. 3 des 4 tests de reproduction échouaient avant correction.
+- **Correction :** à l'arrêt du mouvement, la carte encore présente est rendue visible et marquée « sortie » (atténuée, `inert`) ; `Annuler` retire la marque, même après la fin de la transition. Aucun changement de durée ni de style des animations, ni de Rust, SQLite, fiche flottante ou ancrage du défilement.
+- **Tests :** `pnpm typecheck` OK ; interface 129/129 (+4).
+
+## 2026-10-10 — Brique 001-C : notification d'annulation compacte et discrète
+
+- **Demande :** notification trop longue (8 s) et trop visible près de la capture rapide.
+- **Réalisé :** 4 s ; texte « Déplacée dans la corbeille » ; pilule compacte en bas à droite sur la ligne du pied de page ; pause du compte à rebours au survol et au focus, reprise avec le temps restant ; mêmes composant et région vivante.
+- **Inchangés :** animations d'arrivée et de départ, correctif `data-departed` et ses 4 tests, défilement, fiche flottante, SQLite.
+- **Tests :** `pnpm typecheck` OK ; interface 132/132 (notification : 6 tests dont survol, focus, cumul, reprise du temps restant).
+- **Vérification Windows réelle (instance du propriétaire fermée) :** position, non-recouvrement, durée de 4,4 s, pause au survol, reprise du temps restant et « Annuler » conformes à 1700, 960 et 600 px. Un échec apparent (3,7 s au lieu d'une disparition plus rapide) venait du script de mesure, et non de l'application : un survol réel de 5 s maintient la pilule, sa sortie la fait disparaître en 3,8 s (temps restant). Corrigé dans le script, pas dans l'application.
+- **Fermeture normale :** code 0, `-wal` vide, `integrity_check` ok, dossier Stable absent, aucun processus ni port resté ouvert.
+
 ## Modèle à recopier après chaque brique
 
 ### AAAA-MM-JJ — Brique XXX : [nom]

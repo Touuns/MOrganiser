@@ -106,7 +106,7 @@ const listCards = () => {
 const cardTexts = () => listCards().map((li) => li.querySelector(".inbox__content")?.textContent);
 const openCard = async (text: RegExp | string) =>
   fireEvent.click(await screen.findByRole("button", { name: new RegExp(text) }));
-const toastText = () => screen.queryByText("Capture déplacée dans la corbeille.");
+const toastText = () => screen.queryByText("Déplacée dans la corbeille");
 const finishAll = () => animations.forEach((a) => a.finish());
 
 async function trashFromSheet(text: string) {
@@ -162,7 +162,7 @@ describe("Disparition d'une capture mise à la corbeille (001-C)", () => {
     expect(region.closest(".inbox-home__main")).toBeNull(); // hors du flux : rien ne se déplace
 
     await trashFromSheet("Alpha");
-    const toast = await screen.findByText("Capture déplacée dans la corbeille.");
+    const toast = await screen.findByText("Déplacée dans la corbeille");
     expect(region.contains(toast)).toBe(true);
     expect(screen.getByRole("button", { name: "Annuler" })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: /Fiche/ })).not.toBeInTheDocument(); // fiche fermée
@@ -195,7 +195,7 @@ describe("Disparition d'une capture mise à la corbeille (001-C)", () => {
     backend.seed("Alpha");
     render(<InboxHome />);
     await trashFromSheet("Alpha");
-    expect(await screen.findByText("Capture déplacée dans la corbeille.")).toBeInTheDocument();
+    expect(await screen.findByText("Déplacée dans la corbeille")).toBeInTheDocument();
     await waitFor(() => expect(cardTexts()).toEqual([]));
     expect(animations).toHaveLength(0);
     expect(ghosts()).toHaveLength(0);
@@ -229,7 +229,7 @@ describe("Disparition d'une capture mise à la corbeille (001-C)", () => {
     await trashFromSheet("Bravo");
     await waitFor(() => expect(cardTexts()).toEqual([]));
 
-    expect(screen.getAllByText("Capture déplacée dans la corbeille.")).toHaveLength(1);
+    expect(screen.getAllByText("Déplacée dans la corbeille")).toHaveLength(1);
     fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
     await waitFor(() => expect(cardTexts()).toEqual(["Bravo"]));
     expect(backend.find(bravo.id)!.deletedAt).toBeNull();
@@ -251,7 +251,7 @@ describe("Disparition d'une capture mise à la corbeille (001-C)", () => {
     await waitFor(() =>
       expect(document.querySelector(".paged__list")!.textContent).not.toContain("Capture 24"),
     );
-    expect(screen.getByText("Capture déplacée dans la corbeille.")).toBeInTheDocument();
+    expect(screen.getByText("Déplacée dans la corbeille")).toBeInTheDocument();
     finishAll();
   });
 
@@ -264,7 +264,7 @@ describe("Disparition d'une capture mise à la corbeille (001-C)", () => {
     await waitFor(() => expect(cardTexts()).toEqual(["Bravo"]));
     fireEvent.click(within(detail()).getByRole("button", { name: "Mettre à la corbeille" }));
 
-    expect(await screen.findByText("Capture déplacée dans la corbeille.")).toBeInTheDocument();
+    expect(await screen.findByText("Déplacée dans la corbeille")).toBeInTheDocument();
     expect(animations).toHaveLength(0);
     expect(ghosts()).toHaveLength(0);
     expect(cardTexts()).toEqual(["Bravo"]);
@@ -318,5 +318,105 @@ describe("Disparition d'une capture mise à la corbeille (001-C)", () => {
     expect(ghosts()[0].textContent).toContain("Bravo");
     await act(async () => finishAll());
     await waitFor(() => expect(ghosts()).toHaveLength(0));
+  });
+});
+
+describe("Carte masquée par la transition : jamais durablement invisible", () => {
+  /** Retarde la réponse d'une commande jusqu'à `release()`. */
+  function hold(command: string) {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const previous = tauri.invoke.getMockImplementation()!;
+    tauri.invoke.mockImplementation(async (name, args) => {
+      if (name === command) await gate;
+      return previous(name, args);
+    });
+    return async () => {
+      await act(async () => release());
+    };
+  }
+
+  const pagedCard = (text: string) =>
+    within(document.querySelector(".paged__list") as HTMLElement).getByText(text).closest("li") as HTMLElement;
+
+  async function openAllAndPick(text: string) {
+    for (let i = 0; i < 25; i++) backend.seed(`Capture ${String(i).padStart(2, "0")}`);
+    render(<InboxHome />);
+    fireEvent.click(await screen.findByRole("button", { name: "Voir tout" }));
+    await screen.findByRole("heading", { name: "Toutes les captures" });
+    await openCard(text);
+  }
+
+  it("relecture en échec après la suppression : l'ancienne carte n'est pas laissée invisible", async () => {
+    await openAllAndPick("Capture 24");
+    // La suppression réussit, mais la relecture de la liste échoue.
+    backend.state.failures.set("list_inbox_items", { code: "storage", message: "Lecture impossible." });
+    const card = pagedCard("Capture 24");
+    fireEvent.click(within(detail()).getByRole("button", { name: "Mettre à la corbeille" }));
+    await waitFor(() => expect(ghosts()).toHaveLength(1));
+    expect(card.style.visibility).toBe("hidden"); // masquée pendant le trajet
+
+    finishAll(); // l'animation se termine alors que la liste n'a pas pu être relue
+    await waitFor(() => expect(ghosts()).toHaveLength(0));
+    expect(await screen.findByText("Lecture impossible.")).toBeInTheDocument();
+    expect(card.isConnected).toBe(true); // toujours dans le DOM (liste périmée)
+    expect(card.style.visibility).toBe(""); // aucun style laissé par l'animation
+    expect(card.hasAttribute("data-departed")).toBe(true); // marquée comme sortie, non interactive
+    expect(card.hasAttribute("inert")).toBe(true);
+  });
+
+  it("la relecture réussie ensuite retire la carte ; aucune trace ne subsiste", async () => {
+    await openAllAndPick("Capture 24");
+    backend.state.failures.set("list_inbox_items", { code: "storage", message: "Lecture impossible." });
+    fireEvent.click(within(detail()).getByRole("button", { name: "Mettre à la corbeille" }));
+    await waitFor(() => expect(ghosts()).toHaveLength(1));
+    finishAll();
+    await screen.findByText("Lecture impossible.");
+
+    backend.state.failures.clear();
+    fireEvent.click(screen.getByRole("button", { name: "Réessayer" }));
+    await waitFor(() =>
+      expect(document.querySelector(".paged__list")!.textContent).not.toContain("Capture 24"),
+    );
+    expect(ghosts()).toHaveLength(0);
+  });
+
+  it("redimensionnement avant la fin de la relecture : carte visible puis retirée à la relecture", async () => {
+    await openAllAndPick("Capture 24");
+    const releaseList = hold("list_inbox_items"); // la relecture tarde
+    const card = pagedCard("Capture 24");
+    fireEvent.click(within(detail()).getByRole("button", { name: "Mettre à la corbeille" }));
+    await waitFor(() => expect(ghosts()).toHaveLength(1));
+    expect(card.style.visibility).toBe("hidden");
+
+    window.dispatchEvent(new Event("resize")); // annule la transition avant la relecture
+    expect(ghosts()).toHaveLength(0);
+    expect(card.isConnected).toBe(true);
+    expect(card.style.visibility).toBe(""); // pas durablement invisible
+
+    await releaseList();
+    await waitFor(() =>
+      expect(document.querySelector(".paged__list")!.textContent).not.toContain("Capture 24"),
+    );
+  });
+
+  it("« Annuler » après une transition interrompue : la carte redevient normale et interactive", async () => {
+    await openAllAndPick("Capture 24");
+    backend.state.failures.set("list_inbox_items", { code: "storage", message: "Lecture impossible." });
+    const card = pagedCard("Capture 24");
+    fireEvent.click(within(detail()).getByRole("button", { name: "Mettre à la corbeille" }));
+    await waitFor(() => expect(ghosts()).toHaveLength(1));
+    finishAll();
+    await screen.findByText("Lecture impossible.");
+    expect(card.hasAttribute("data-departed")).toBe(true);
+
+    backend.state.failures.clear();
+    fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Capture restaurée."));
+    await waitFor(() => expect(pagedCard("Capture 24")).toBeInTheDocument());
+    const restored = pagedCard("Capture 24");
+    expect(restored.style.visibility).toBe("");
+    expect(restored.hasAttribute("data-departed")).toBe(false);
+    expect(restored.hasAttribute("inert")).toBe(false);
   });
 });

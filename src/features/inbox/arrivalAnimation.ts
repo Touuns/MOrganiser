@@ -158,8 +158,11 @@ export const DEPARTURE_EASING = "cubic-bezier(0.4, 0, 1, 1)";
 
 export interface DepartureHandle {
   /**
-   * Arrête la transition et retire la carte fantôme. `restoreCard` rend sa carte réelle visible
-   * (restauration pendant la transition) ; sans cela elle reste masquée : elle est à la corbeille.
+   * Arrête la transition et retire la carte fantôme. La carte réelle n'est JAMAIS laissée
+   * invisible par l'animation : si elle est encore dans le DOM (liste pas encore relue ou relecture
+   * en échec), elle est rendue visible mais marquée « sortie » (atténuée, non interactive).
+   * `restoreCard` (restauration) la remet à l'état normal et interactif. Idempotent, y compris
+   * après la fin de la transition.
    */
   cancel: (options?: { restoreCard?: boolean }) => void;
 }
@@ -203,8 +206,27 @@ export function playDeparture(options: { card: HTMLElement; durationMs?: number 
     observer?.disconnect();
     window.clearTimeout(observerTimer);
   };
+  /**
+   * État de la carte réelle quand le mouvement s'arrête : toujours visible. Si la liste ne l'a
+   * pas (encore) retirée, elle est marquée comme sortie : la base la sait à la corbeille, la
+   * liste périmée ne doit pas la présenter comme active.
+   */
+  const settleCard = (restore: boolean) => {
+    if (!card.isConnected) return;
+    card.style.visibility = "";
+    if (restore) {
+      card.removeAttribute("data-departed");
+      card.removeAttribute("inert");
+    } else {
+      card.setAttribute("data-departed", "");
+      card.setAttribute("inert", "");
+    }
+  };
   const finish = (restoreCard = false) => {
-    if (done) return;
+    if (done) {
+      if (restoreCard) settleCard(true); // restauration après la fin : on retire la marque
+      return;
+    }
     done = true;
     window.clearTimeout(timer);
     stopObserving();
@@ -215,7 +237,7 @@ export function playDeparture(options: { card: HTMLElement; durationMs?: number 
       // déjà terminées
     }
     ghost?.remove();
-    if (restoreCard) card.style.visibility = "";
+    settleCard(restoreCard);
   };
 
   try {

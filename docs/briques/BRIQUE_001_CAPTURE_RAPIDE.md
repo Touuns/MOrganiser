@@ -382,3 +382,16 @@ L'arrivée animée est validée par le propriétaire et reste inchangée. Consta
 | « Voir tout » | Géométrie stable ; voisine 142 → 142 px ; lecture conservée |
 | Changement de filtre, fiche ouverte | Boîte et capture immobiles |
 | Fenêtre de 600 px | La fiche remplace la vue ; liste et capture de retour à la fermeture |
+
+### Carte masquée par la transition de sortie (correctif du 2026-10-10)
+
+La carte réelle n'est masquée que pendant le trajet et **n'est jamais laissée invisible** : quand le mouvement s'arrête (fin, annulation par redimensionnement, délai de sécurité) et que la liste ne l'a pas encore retirée (relecture tardive ou en échec), elle est rendue visible mais **marquée « sortie »** (`data-departed` : atténuée, `inert`). Une relecture réussie la retire ; « Annuler » lui rend son état normal et interactif, même si la transition était déjà terminée. Les durées et styles des animations ne changent pas. Tests : 4 de plus, interface : 129.
+
+### Notification d'annulation compacte (ajustement du 2026-10-10)
+
+- Texte « Déplacée dans la corbeille » + bouton « Annuler », en pilule compacte ; durée **4 s** (au lieu de 8).
+- Position : **en bas à droite de la fenêtre, sur la ligne du pied de page**, hors flux : elle ne recouvre ni le champ de capture, ni « Envoyer », ni la boîte, et ne déplace rien ; même emplacement en fenêtre étroite.
+- Le compte à rebours est **suspendu** au survol de la souris ou tant que le bouton a le focus, puis **reprend avec le temps restant** : le bouton ne disparaît pas sous le curseur.
+- L'annonce par les lecteurs d'écran est inchangée (région vivante persistante). Après expiration, la capture reste récupérable depuis la vue Corbeille.
+- Composant réutilisé : `UndoToast` (aucun second système). Tests : 7 sur la notification ; interface : 132.
+- **Mesures dans la fenêtre Windows réelle (validées) :** position en bas à droite (`t` 764, `b` 796) à 1700, 960 et 600 px ; boîte, champ et « Envoyer » immobiles ; aucun recouvrement du champ, de « Envoyer » ni de la boîte ; disparition ≈ 4,4 s après l'action ; pause au survol (affichée 6 s pendant que la souris est dessus, disparition ≈ 3,8 s après la sortie du curseur, soit le temps restant) ; « Annuler » restaure la capture (20 → 20 cartes) et retire la notification.

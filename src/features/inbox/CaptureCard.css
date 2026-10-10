@@ -19,6 +19,11 @@
   will-change: transform, opacity;
 }
 
+/* Carte dont la capture est à la corbeille mais que la liste n'a pas encore retirée. */
+.inbox__item[data-departed] {
+  opacity: 0.5;
+}
+
 .inbox__item[data-selected] {
   border-color: var(--color-accent);
 }
