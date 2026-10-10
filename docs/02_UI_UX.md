@@ -18,7 +18,7 @@
 Ordre de lecture suggéré, à tester sur prototype :
 
 1. Bandeau discret : recherche, contexte, paramètres.
-2. **Capture rapide + boîte « À organiser » côte à côte**, idéalement face à face.
+2. **Boîte « À organiser » juste au-dessus de la capture rapide** (ensemble vertical ; décision du 2026-10-10, remplace « côte à côte »). Sous le champ : « Destination (facultatif) », jamais appelé « Tags ».
 3. **Mes tâches personnelles** : vraies tâches identifiables, statuts et prochaine action.
 4. **Engagements externes** : vraies tâches distinctes.
 5. En attente / échéances critiques et informations utiles ; statistiques discrètes.
@@ -38,7 +38,7 @@ En fenêtre moins large, réorganiser les sections en colonnes verticales sans p
 1. Saisie et validation.
 2. Persistance locale réussie (ou indication de traitement pending sans faux succès).
 3. Naissance visuelle d'une petite **carte** près du champ.
-4. Trajectoire fluide vers la boîte « À organiser » ; insertion à la bonne position.
+4. Trajectoire fluide, **ascendante**, vers la boîte « À organiser » située au-dessus ; insertion **en bas de la liste** (ordre chronologique, la plus récente au plus près du champ) (sous-brique 001-C).
 5. Boîte mise à jour, focus rendu au champ.
 
 Animation discrète et rapide ; bloquer les doubles envois ; ne pas faire disparaître une saisie non sauvegardée. `reduced motion` : transition instantanée sans trajectoire. Les contraintes de performance et de clavier priment sur l'effet.

@@ -1,10 +1,16 @@
 //! Commandes appelables depuis l'interface (via `invoke` côté TypeScript).
+//!
+//! Elles ne font que relayer vers les modules de domaine ; chacune est déclarée dans
+//! `build.rs` et autorisée nommément dans `capabilities/default.json`.
+
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use tauri::State;
 
 use crate::environment::Channel;
-use crate::AppEnvironment;
+use crate::inbox::{self, Destination, InboxError, InboxFilter, InboxItem, InboxPage};
+use crate::{AppEnvironment, Database};
 
 /// Informations de diagnostic affichées dans la fenêtre. Lecture seule.
 #[derive(Debug, Serialize)]
@@ -22,4 +28,53 @@ pub fn app_info(app: tauri::AppHandle, env: State<'_, AppEnvironment>) -> AppInf
         version: app.package_info().version.to_string(),
         data_dir: env.data_dir.display().to_string(),
     }
+}
+
+/// Exécute `action` avec la connexion, accès un par un.
+fn with_db<T>(
+    db: &Database,
+    action: impl FnOnce(&rusqlite::Connection) -> Result<T, InboxError>,
+) -> Result<T, InboxError> {
+    let conn = db.0.lock().map_err(|_| InboxError::Unavailable)?;
+    let result = action(&conn);
+    if let Err(InboxError::Storage(cause)) = &result {
+        // Cause technique pour le diagnostic (terminal de développement uniquement).
+        // Requêtes paramétrées : elle ne contient jamais le texte saisi.
+        eprintln!("[M'Organiser] erreur SQLite : {cause}");
+    }
+    result
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+// Commandes `async` : exécutées hors du fil principal, la fenêtre reste fluide.
+
+#[tauri::command]
+pub async fn list_destinations(db: State<'_, Database>) -> Result<Vec<Destination>, InboxError> {
+    with_db(&db, inbox::list_destinations)
+}
+
+#[tauri::command]
+pub async fn list_inbox_items(
+    db: State<'_, Database>,
+    filter: InboxFilter,
+    limit: u32,
+) -> Result<InboxPage, InboxError> {
+    with_db(&db, |conn| inbox::list_items(conn, &filter, limit))
+}
+
+#[tauri::command]
+pub async fn create_inbox_item(
+    db: State<'_, Database>,
+    content: String,
+    destination_id: Option<String>,
+) -> Result<InboxItem, InboxError> {
+    with_db(&db, |conn| {
+        inbox::create_item(conn, &content, destination_id.as_deref(), now_ms())
+    })
 }

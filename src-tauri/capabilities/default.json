@@ -3,5 +3,10 @@
   "identifier": "default",
   "description": "Permissions de la fenêtre principale. Chaque commande est autorisée nommément ; aucune permission système (core, plugins). Voir docs/04_SECURITE.md.",
   "windows": ["main"],
-  "permissions": ["allow-app-info"]
+  "permissions": [
+    "allow-app-info",
+    "allow-list-destinations",
+    "allow-list-inbox-items",
+    "allow-create-inbox-item"
+  ]
 }

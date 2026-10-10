@@ -1,6 +1,6 @@
 # M'Organiser
 
-**Statut : fondations techniques posées (brique 000) — aucune fonctionnalité utilisateur encore.**  
+**Statut : brique 000 validée ; brique 001-A (capture rapide + « À organiser », SQLite locale) en cours de validation.**  
 **Plateforme cible : Windows, en premier.**  
 **Pile : Tauri 2 + React + TypeScript + Rust.**  
 **Méthode : une brique fonctionnelle à la fois.**
@@ -15,7 +15,7 @@ pnpm app:dev      # ouvre la fenêtre « M'Organiser — DEV »
 pnpm test         # tous les tests (interface + Rust)
 ```
 
-La première compilation Rust prend quelques minutes. Les données Dev sont dans `%LOCALAPPDATA%\com.morganiser.desktop.dev\data`, jamais dans celles de Stable. Détails : `docs/briques/BRIQUE_000_FONDATIONS.md`.
+Pour arrêter, fermez la fenêtre par `×` (fermeture normale) plutôt que `Ctrl+C` dans le terminal. La première compilation Rust prend quelques minutes. Les données Dev (base `morganiser.db`) sont dans `%LOCALAPPDATA%\com.morganiser.desktop.dev\data`, jamais dans celles de Stable. Détails : `docs/briques/BRIQUE_000_FONDATIONS.md`.
 
 M'Organiser est un centre de contrôle personnel : il doit aider à capturer, organiser, exécuter et suivre les responsabilités personnelles et externes, les projets, les objets, les finances et, plus tard, les loisirs.
 

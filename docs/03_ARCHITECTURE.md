@@ -9,7 +9,7 @@
 | Interface | React 19 + TypeScript, Vite | `src/` |
 | Styles | CSS natif + jetons de design (variables CSS) | `src/styles/` |
 | Système, métier, persistance | Rust, Tauri 2 | `src-tauri/src/` |
-| Base locale (dès la brique 001) | SQLite, accédée uniquement depuis Rust | `%LOCALAPPDATA%\<identifiant>\data` |
+| Base locale (dès la brique 001) | SQLite (`rusqlite`, compilé dans l'exécutable), accédée uniquement depuis Rust | `%LOCALAPPDATA%\<identifiant>\data\morganiser.db` |
 | Tests | Vitest + Testing Library (interface), `cargo test` (Rust) | `pnpm test` |
 
 Communication : l'interface appelle des **commandes Rust** nommées (`invoke("…")`) regroupées dans `src-tauri/src/commands.rs`, et passe par un module unique côté TypeScript (`src/lib/`). L'interface n'accède jamais directement aux fichiers ni à la base.
@@ -17,6 +17,12 @@ Communication : l'interface appelle des **commandes Rust** nommées (`invoke("�
 Sécurité de la fenêtre : politique de sécurité du contenu (CSP) stricte dans `tauri.conf.json` (aucune ressource externe, aucun appel réseau). Les commandes Rust sont déclarées dans `build.rs` et autorisées une par une dans `capabilities/default.json` ; aucune permission système. Politique complète : `04_SECURITE.md`, section « Commandes Rust et permissions ».
 
 Environnements : voir `docs/briques/BRIQUE_000_FONDATIONS.md` (identifiants, dossiers, garde-fous Dev/Stable).
+
+Persistance (depuis 001-A) :
+- `src-tauri/src/storage/` : ouverture de la base, réglages (`foreign_keys`, WAL), migrations SQL versionnées (`src-tauri/migrations/NNNN_*.sql`, numéro dans `PRAGMA user_version`, une transaction par migration ; base plus récente que l'application refusée).
+- Un module par domaine (`src-tauri/src/inbox.rs` pour « À organiser ») : validation, requêtes paramétrées, testé sur bases temporaires.
+- Une seule connexion partagée, protégée par un verrou ; les commandes Tauri (`commands.rs`) ne font que relayer vers les modules de domaine.
+- Côté interface, une fonctionnalité regroupe ses composants et son unique module d'appel Rust (`src/features/<fonction>/`).
 
 ## Séparation indispensable
 
@@ -29,7 +35,8 @@ La construction doit être **modulaire sans sur-ingénierie** : créer seulement
 
 ## Objets conceptuels
 
-- `InboxItem` : texte brut, créé le, classé/non classé, éventuellement transformé sans perte de source.
+- `InboxItem` : texte brut, créé le, destination facultative (pas un tag), éventuellement transformé sans perte de source.
+- `Destination` : espace de responsabilité (Moi, Externe) ou rubrique (Administratif, Finances, Inventaire) ; identifiant stable, renommable, archivable, jamais supprimée.
 - `Task` : identifiant, titre, statut, priorité facultative, échéance facultative, responsabilité, liens, date création/clôture.
 - `TaskRelation` : parent/enfant OU dépendance explicite ; ne pas confondre ces deux relations.
 - `Person` : fiche de contexte et relations, sans doublons inutiles.

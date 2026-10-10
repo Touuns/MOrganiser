@@ -31,6 +31,8 @@ L'implémentation exacte (JSON, code typé, base locale) sera décidée avec la 
 6. Focus sur l'inventaire plus tard ; relier une console existante ou exemple isolé.
 7. Montrer le tableau de bord, Moi/Externe, et la possibilité de rejouer le parcours.
 
+Première mise en œuvre prévue : sous-brique **001-E** (spotlight sur le vrai champ de capture et la vraie boîte « À organiser », « Passer » disponible), sans le moteur complet.
+
 ## Quand une fonctionnalité n'existe pas encore
 
 Ne pas l'afficher comme disponible ; le parcours actif ne référence que les briques implémentées et vérifiées. Les nouvelles séquences sont ajoutées après chaque version stable.

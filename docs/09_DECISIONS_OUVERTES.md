@@ -29,11 +29,20 @@
 - Dev : `com.morganiser.desktop.dev` ; Stable : `com.morganiser.desktop`.
 - La **stratégie de sauvegarde** reste à arbitrer (avant usage réel de Stable).
 
+### 2026-10-10 — Brique 001 (validées par le propriétaire)
+
+- **Destination ≠ tag :** une capture peut recevoir **une destination principale facultative**, qui indique où elle sera traitée. Destinations initiales : espaces de responsabilité **Moi**, **Externe** ; rubriques **Administratif**, **Finances**, **Inventaire** (« Vente » non retenue). Aucun module n'est créé par une destination. Le modèle enregistre la nature (responsabilité / rubrique) pour permettre plus tard des associations multiples. La capture reste dans « À organiser », filtrable par destination ; un seul enregistrement.
+- **Disposition :** la boîte « À organiser » est placée **au-dessus** du champ de capture (remplace « côte à côte »).
+- **Ordre d'affichage :** ordre chronologique croissant ; chaque nouvelle capture apparaît **en bas** de la liste, juste au-dessus du champ (remplace « en tête, récent d'abord »). Au-delà de la limite d'affichage, ce sont les plus récentes qui sont montrées. Référence pour l'animation 001-C.
+- **Répartition 001-B / 002 :** édition et suppression élémentaires d'une capture en 001-B ; conversion en tâche/note/projet en brique 002.
+- **Nom de la base :** `morganiser.db`, dans le dossier `data` de l'environnement (Dev : `%LOCALAPPDATA%\com.morganiser.desktop.dev\data`). Mode WAL : fichiers auxiliaires `-wal`/`-shm` à traiter avec la base (voir fiche brique 001, section 7).
+- **Référence unique :** `docs/briques/BRIQUE_001_CAPTURE_RAPIDE.md` (la spécification V2 y a été fusionnée).
+
 ## À arbitrer avant le développement de la brique 001
 
 1. ~~Pile technologique Windows~~ → actée le 2026-10-08 (voir ci-dessus).
-2. **Emplacement technique des données** : proposition ci-dessus à confirmer ; stratégie de sauvegarde encore ouverte.
-3. **Nom technique de la base** : `organiser.db` seulement comme exemple ; la retranscription « Pantao » n'est pas une décision ferme.
+2. **Emplacement technique des données** : appliqué en Dev ; la **stratégie de sauvegarde/restauration** reste ouverte et doit être décidée **avant toute utilisation de Stable avec des données réelles**.
+3. ~~Nom technique de la base~~ → `morganiser.db`, acté le 2026-10-10.
 
 ## À arbitrer au fil des briques
 
