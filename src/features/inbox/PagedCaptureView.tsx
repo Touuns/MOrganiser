@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import type { Cursor, Destination, InboxItem, InboxPage } from "./api";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import type { Cursor, Destination, InboxItem } from "./api";
 import { CaptureCard } from "./CaptureCard";
 import { recordAnchors, restoreAnchors, type Anchor } from "./scrollAnchor";
 import "./PagedCaptureView.css";
@@ -7,31 +7,40 @@ import "./PagedCaptureView.css";
 /** Taille d'un lot de l'historique complet. */
 export const PAGE_SIZE = 50;
 
-interface PagedCaptureViewProps {
+/** Une page de la liste, de l'élément le plus récent au plus ancien (captures ou tâches). */
+interface Page<T> {
+  items: T[];
+  total: number;
+  nextCursor: Cursor | null;
+}
+
+interface PagedCaptureViewProps<T extends { id: string } = InboxItem> {
   title: string;
   onBack: () => void;
   /** Charge une page ; `null` = la plus récente. Doit rester stable tant que le filtre ne change pas. */
-  loader: (before: Cursor | null) => Promise<InboxPage>;
+  loader: (before: Cursor | null) => Promise<Page<T>>;
+  /** Rendu d'un élément (ex. une tâche) ; par défaut, la carte d'une capture. */
+  renderItem?: (item: T) => ReactNode;
   /** Change après chaque modification de données : la vue repart de la page la plus récente. */
   reloadKey: number;
   destinations: Destination[];
   selectedId: string | null;
-  onOpen: (item: InboxItem) => void;
+  onOpen?: (item: T) => void;
   toolbar?: ReactNode;
   emptyText: string;
   /** Date et préfixe affichés sur chaque carte (corbeille : date de suppression). */
-  dateOf?: (item: InboxItem) => number;
+  dateOf?: (item: T) => number;
   datePrefix?: string;
-  renderAction?: (item: InboxItem) => ReactNode;
+  renderAction?: (item: T) => ReactNode;
 }
 
 /**
  * Liste complète chargée par lots, en ordre chronologique (la plus récente en bas). Les lots
  * plus anciens s'ajoutent au-dessus ; la position de défilement est conservée.
  */
-export function PagedCaptureView(props: PagedCaptureViewProps) {
+export function PagedCaptureView<T extends { id: string } = InboxItem>(props: PagedCaptureViewProps<T>) {
   const { title, onBack, loader, reloadKey, destinations, selectedId, onOpen, toolbar } = props;
-  const [items, setItems] = useState<InboxItem[]>([]);
+  const [items, setItems] = useState<T[]>([]);
   const [total, setTotal] = useState(0);
   const [nextCursor, setNextCursor] = useState<Cursor | null>(null);
   const [loading, setLoading] = useState(true);
@@ -44,7 +53,7 @@ export function PagedCaptureView(props: PagedCaptureViewProps) {
     { kind: "bottom" } | { kind: "anchor" } | { kind: "keep"; height: number; top: number } | null
   >(null);
   const anchors = useRef<Anchor[]>([]);
-  const itemsRef = useRef<InboxItem[]>([]);
+  const itemsRef = useRef<T[]>([]);
   itemsRef.current = items;
   const lastLoader = useRef(loader);
   const labels = new Map(destinations.map((d) => [d.id, d.label]));
@@ -181,18 +190,27 @@ export function PagedCaptureView(props: PagedCaptureViewProps) {
             </button>
           )}
           <ol className="paged__list" aria-busy={loading || loadingMore}>
-            {items.map((item) => (
-              <CaptureCard
-                key={item.id}
-                item={item}
-                destinationLabel={item.destinationId ? (labels.get(item.destinationId) ?? item.destinationId) : null}
-                selected={item.id === selectedId}
-                onOpen={onOpen}
-                date={props.dateOf?.(item)}
-                datePrefix={props.datePrefix}
-                action={props.renderAction?.(item)}
-              />
-            ))}
+            {items.map((element) => {
+              if (props.renderItem) {
+                return <Fragment key={element.id}>{props.renderItem(element)}</Fragment>;
+              }
+              // Sans `renderItem`, les éléments sont des captures (usage historique).
+              const item = element as unknown as InboxItem;
+              return (
+                <CaptureCard
+                  key={item.id}
+                  item={item}
+                  destinationLabel={
+                    item.destinationId ? (labels.get(item.destinationId) ?? item.destinationId) : null
+                  }
+                  selected={item.id === selectedId}
+                  onOpen={(opened) => onOpen?.(opened as unknown as T)}
+                  date={props.dateOf?.(element)}
+                  datePrefix={props.datePrefix}
+                  action={props.renderAction?.(element)}
+                />
+              );
+            })}
           </ol>
         </div>
       )}

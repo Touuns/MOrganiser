@@ -1,14 +1,19 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
+  cancelTaskConversion,
   createInboxItem,
+  getTask,
   listDestinations,
   listInboxItems,
+  listTasks,
   listTrashedItems,
   restoreInboxItem,
+  type Conversion,
   type Cursor,
   type Destination,
   type InboxFilter,
   type InboxItem,
+  type Task,
 } from "./api";
 import { CaptureDetail, type CaptureDetailHandle } from "./CaptureDetail";
 import { LeaveBanner } from "../../components/LeaveBanner";
@@ -18,6 +23,8 @@ import { FilterSelect, InboxPanel, type Arrival, type InboxPanelHandle } from ".
 import { PAGE_SIZE, PagedCaptureView } from "./PagedCaptureView";
 import { playDeparture, type DepartureHandle } from "./arrivalAnimation";
 import { UndoToast } from "./UndoToast";
+import { TaskCard } from "./TaskCard";
+import { TaskDetail } from "./TaskDetail";
 import { InitiationGuide, type BoxState } from "../initiation/InitiationGuide";
 import type { InitiationController } from "../initiation/useInitiation";
 import "./InboxHome.css";
@@ -25,7 +32,7 @@ import "./InboxHome.css";
 /** Nombre de captures affichées sur l'accueil (les plus récentes). */
 export const HOME_LIMIT = 20;
 
-type View = "home" | "all" | "trash";
+type View = "home" | "all" | "trash" | "tasks";
 type Status = { kind: "ok" | "error"; text: string } | null;
 
 /** Une demande de fermeture de la fenêtre : annulable, et réexaminée à chaque étape. */
@@ -61,7 +68,14 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
   // Compteur incrémenté après chaque modification de données : relance les lectures.
   const [version, setVersion] = useState(0);
   const [status, setStatus] = useState<Status>(null);
-  const [toast, setToast] = useState<{ id: number; itemId: string } | null>(null);
+  // Notification d'annulation : corbeille ou conversion en tâche (une seule à la fois).
+  const [toast, setToast] = useState<
+    { id: number; kind: "trash"; itemId: string } | { id: number; kind: "convert"; itemId: string; taskId: string } | null
+  >(null);
+  // Fiche d'une tâche (lecture seule) : exclusive avec la fiche d'une capture.
+  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const selectedTaskRef = useRef<Task | null>(null);
+  selectedTaskRef.current = selectedTask;
   // Seule la réponse de la dernière demande est affichée (changements de filtre rapides).
   const lastRequest = useRef(0);
   const detailRef = useRef<CaptureDetailHandle>(null);
@@ -278,9 +292,40 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
     if (selected?.id === item.id) return;
     const active = document.activeElement;
     guard(() => {
-      if (!selected && active instanceof HTMLElement) opener.current = active;
+      if (!selected && !selectedTask && active instanceof HTMLElement) opener.current = active;
+      setSelectedTask(null);
       setSelected(item);
     });
+  }
+
+  function openTask(task: Task) {
+    if (selectedTask?.id === task.id) return;
+    const active = document.activeElement;
+    // La fiche d'une capture (et son brouillon, titre de conversion compris) est protégée.
+    guard(() => {
+      if (!selected && !selectedTask && active instanceof HTMLElement) opener.current = active;
+      setSelected(null);
+      setSelectedTask(task);
+    });
+  }
+
+  /** « Voir la tâche » depuis une capture déjà convertie. */
+  async function openTaskById(taskId: string) {
+    try {
+      openTask(await getTask(taskId));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "La tâche n'a pas pu être ouverte.";
+      setStatus({ kind: "error", text: message });
+    }
+  }
+
+  function closeTask() {
+    setSelectedTask(null);
+    const target = opener.current;
+    opener.current = null;
+    window.setTimeout(() => {
+      if (target?.isConnected) target.focus({ preventScroll: true });
+    }, 0);
   }
 
   function closeDetail() {
@@ -329,6 +374,36 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
     if (selectedRef.current?.id === id) void detailRef.current?.refresh();
   }
 
+  /** La conversion est confirmée par Rust : la carte part, la notification propose d'annuler. */
+  function handleConverted(conversion: Conversion, closeSheet: boolean) {
+    const { item, task } = conversion;
+    const closing = closeSheet && selectedRef.current?.id === item.id;
+    if (closing) {
+      opener.current = null; // la carte d'origine disparaît : le focus va à sa voisine
+      closeDetail();
+    } else refreshOpenSheet(item.id);
+    setDeparture({ id: item.id, moveFocus: closing });
+    setToast({ id: Date.now(), kind: "convert", itemId: item.id, taskId: task.id });
+    setStatus(null);
+    changed();
+  }
+
+  async function undoConversion(taskId: string) {
+    setToast(null);
+    cancelDeparture(true); // pas de carte fantôme persistante ; la carte restaurée est visible
+    try {
+      const result = await track(cancelTaskConversion(taskId));
+      setStatus({ kind: "ok", text: "Conversion annulée : la capture est de retour dans « À organiser »." });
+      if (selectedTaskRef.current?.id === taskId) setSelectedTask(null);
+      refreshOpenSheet(result.item.id);
+      changed();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "L'annulation a échoué.";
+      setStatus({ kind: "error", text: `${message} La capture reste transformée en tâche.` });
+      changed();
+    }
+  }
+
   async function undoTrash(itemId: string) {
     setToast(null);
     cancelDeparture(true); // pas de carte fantôme persistante ; la carte restaurée est visible
@@ -357,11 +432,12 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
 
   const loadAll = useCallback((before: Cursor | null) => listInboxItems(filter, PAGE_SIZE, before), [filter]);
   const loadTrash = useCallback((before: Cursor | null) => listTrashedItems(PAGE_SIZE, before), []);
+  const loadTasks = useCallback((before: Cursor | null) => listTasks(PAGE_SIZE, before), []);
 
   return (
     <div
       className="inbox-home"
-      data-detail={selected ? "open" : "closed"}
+      data-detail={selected || selectedTask ? "open" : "closed"}
       data-initiation={initiationStep === "capture" || initiationStep === "box" ? initiationStep : undefined}
       data-guide={initiationStep !== null ? "on" : undefined}
     >
@@ -408,6 +484,7 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
             onOpen={openItem}
             onShowAll={() => changeView("all")}
             onShowTrash={() => changeView("trash")}
+            onShowTasks={() => changeView("tasks")}
             highlightId={initiationStep === "box" ? createdId : null}
           />
         )}
@@ -422,6 +499,29 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
             onOpen={openItem}
             toolbar={<FilterSelect destinations={destinations} filter={filter} onChange={setFilter} />}
             emptyText="Aucune capture pour ce filtre."
+          />
+        )}
+        {view === "tasks" && (
+          <PagedCaptureView<Task>
+            title="Tâches"
+            onBack={() => changeView("home")}
+            loader={loadTasks}
+            reloadKey={version}
+            destinations={destinations}
+            selectedId={selectedTask?.id ?? null}
+            emptyText="Aucune tâche pour le moment. Transformez une capture depuis sa fiche."
+            renderItem={(task) => (
+              <TaskCard
+                task={task}
+                destinationLabel={
+                  task.destinationId
+                    ? (destinations.find((d) => d.id === task.destinationId)?.label ?? task.destinationId)
+                    : null
+                }
+                selected={task.id === selectedTask?.id}
+                onOpen={openTask}
+              />
+            )}
           />
         )}
         {view === "trash" && (
@@ -481,7 +581,7 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
                 } else refreshOpenSheet(item.id);
                 // Disparition en fondu de SA carte, après l'enregistrement en base (jamais avant).
                 setDeparture({ id: item.id, moveFocus: closing });
-                setToast({ id: Date.now(), itemId: item.id });
+                setToast({ id: Date.now(), kind: "trash", itemId: item.id });
                 setStatus(null);
                 changed();
               }}
@@ -489,6 +589,18 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
                 setStatus({ kind: "ok", text: "Capture restaurée." });
                 changed();
               }}
+              onConverted={handleConverted}
+              onOpenTask={(taskId) => void openTaskById(taskId)}
+            />
+          </div>
+        )}
+        {selectedTask && (
+          <div className="inbox-home__detail">
+            <TaskDetail
+              key={selectedTask.id}
+              task={selectedTask}
+              destinations={destinations}
+              onClose={closeTask}
             />
           </div>
         )}
@@ -521,9 +633,11 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
         {toast && (
           <UndoToast
             key={toast.id}
-            message="Déplacée dans la corbeille"
+            message={toast.kind === "convert" ? "Transformée en tâche" : "Déplacée dans la corbeille"}
             actionLabel="Annuler"
-            onAction={() => void undoTrash(toast.itemId)}
+            onAction={() =>
+              void (toast.kind === "convert" ? undoConversion(toast.taskId) : undoTrash(toast.itemId))
+            }
             onDismiss={() => setToast(null)}
           />
         )}

@@ -1,7 +1,7 @@
 # Brique 002 — Vie d'un élément capturé : transformation d'une capture en tâche
 
 **Document de référence unique de la brique 002.**
-**État : 002-A implémentée sur la branche `brique-002-preparation` (2026-10-10), en attente de validation ; 002-B et 002-C non commencées.**
+**État : 002-A validée et fusionnée dans `main` (PR #7) ; 002-B implémentée sur la branche `brique-002b-interface`, en attente de validation ; 002-C non commencée.**
 **Dépendances :** brique 001 (A à E) validée et fusionnée dans `main`.
 **À lire avec :** `01_CAHIER_DES_CHARGES.md` (sections C et D), `03_ARCHITECTURE.md`, `04_SECURITE.md`, `05_ROADMAP.md`, `BRIQUE_001_CAPTURE_RAPIDE.md`.
 
@@ -29,11 +29,11 @@ Fiche, édition du texte et de la destination, brouillon protégé, verrou optim
 
 | Sous-brique | Contenu | État |
 |---|---|---|
-| **002-A** | Migration 0002, modèle minimal, commandes Rust, conversion et annulation atomiques, sauvegarde préalable aux migrations, tests | Implémentée, en attente de validation |
+| **002-A** | Migration 0002, modèle minimal, commandes Rust, conversion et annulation atomiques, sauvegarde préalable aux migrations, tests | Validée et fusionnée (PR #7) |
 | **002-B** | « Transformer en tâche » dans la fiche (aperçu du titre, notification « Annuler »), première liste des tâches en lecture seule, liens « Tâches » dans l'en-tête de la boîte | À faire |
 | **002-C** | Vue « Traitées », provenance depuis la tâche, restauration contrôlée (« Remettre dans la boîte »), finitions | À faire |
 
-Aucune interface n'est ajoutée par 002-A. Hors périmètre de 002 : statuts avancés, terminer une tâche, sous-tâches, notes, projets, moteur d'initiation.
+002-A n'ajoute aucune interface ; 002-B ajoute la conversion et la liste des tâches (section 11). Hors périmètre de 002 : statuts avancés, terminer une tâche, sous-tâches, notes, projets, moteur d'initiation.
 
 ## 4. Modèle de données (migration `0002_tasks.sql`)
 
@@ -131,10 +131,57 @@ Le test `restauration_depuis_une_sauvegarde` exécute exactement ces étapes sur
 
 ## 10. Limites et reporté
 
-- **Aucune interface** en 002-A : la conversion n'est utilisable que par les tests et par les commandes (002-B).
+- **Aucune interface en 002-A** (historique) : la conversion était utilisable seulement par les commandes ; l'interface est livrée en 002-B (section 11).
 - La base **Dev réelle** n'a pas été migrée : la première migration réelle se fera à un lancement ultérieur, après un essai distinct sur une copie isolée.
 - Les commandes n'ont pas été exercées dans une fenêtre réelle (pas d'interface) ; leur enregistrement est vérifié par la compilation et les tests de configuration.
 - Une tâche annulée est conservée mais n'a pas encore de vue de récupération : elle relève de la future corbeille des tâches (003).
 - Restauration : procédure manuelle documentée et testée, sans interface.
 - Sauvegarde **utilisateur** (planifiée ou exportable) toujours à décider avant toute donnée réelle dans Stable (voir `09_DECISIONS_OUVERTES.md`).
 - Contrat pour 003 et suivantes : toute modification d'une tâche fait croître `updated_at` (imposé par le déclencheur) ; tout lien rattaché à une tâche (sous-tâche, note, relation) doit ajouter sa condition à la garde d'annulation.
+
+## 11. Réalisation 002-B : interface de conversion et liste des tâches (2026-10-11, en attente de validation)
+
+### Parcours
+1. **Fiche d'une capture :** bouton « Transformer en tâche » entre « Annuler les modifications » et « Mettre à la corbeille » (celle-ci reste isolée à droite). Absent pour une capture supprimée, supprimée ailleurs ou déjà convertie. Les actions de la fiche sont désormais **collantes** en bas du panneau : à 640 px de haut, elles ne sortent plus de la zone visible.
+2. **Panneau de conversion**, intégré en haut de la fiche (pas de fenêtre modale) : titre proposé par `suggest_task_title` (sélectionné, modifiable, 120 caractères), rappel « texte complet conservé, destination reprise, capture conservée ». Pendant le panneau, le texte et la destination sont **figés** : on convertit la version enregistrée.
+3. **Validation :** Entrée ou « Créer la tâche ». Le succès n'est affiché qu'après la réponse de Rust.
+4. **Après la conversion :** la fiche se ferme, la carte part avec la transition de sortie 001-C **inchangée** (mouvement réduit respecté), le focus va à la carte voisine, et la notification « **Transformée en tâche** » + « Annuler » (4 s, pause au survol et au focus) reprend le composant existant.
+5. **« Annuler » :** `cancel_task_conversion` ; la capture revient avec « Conversion annulée : la capture est de retour dans « À organiser » » ; la tâche est conservée (annulée) et sort de la liste ; si elle était ouverte, sa fiche se ferme.
+6. **« Tâches » :** lien dans l'en-tête de la boîte, à côté de « Corbeille ». La vue remplace la scène (la capture rapide reste visible) ; **la plus ancienne en haut, la plus récente en bas**, lots de 50, anciennes chargées au-dessus avec défilement conservé. Chaque carte : titre, « À faire », destination, date.
+7. **Fiche d'une tâche :** panneau flottant, **lecture seule** (titre, détails complets, statut, destination, date de création, « Issue de la capture du … »). Pas d'édition (brique 003).
+
+### Protection du titre (vrai brouillon)
+- Le titre modifié est protégé comme un texte non enregistré : fermeture de la fiche, ouverture d'une autre capture ou d'une autre vue, fermeture de la fenêtre et Échap passent par `requestLeave` / `LeaveBanner`. L'avertissement propose « Abandonner la conversion » ou « Continuer » (pas d'« Enregistrer » : il n'y a rien à enregistrer).
+- Un titre **non modifié** se ferme sans avertissement ; « Annuler la conversion » est l'abandon volontaire explicite.
+- La proposition de titre arrivée tardivement n'écrase jamais un titre déjà modifié ; une proposition d'une fiche refermée est ignorée.
+- Texte modifié avant de transformer : Enregistrer (le panneau s'ouvre sur la version enregistrée), Abandonner (texte rétabli) ou Continuer, comme en 001-B.
+
+### Erreurs et conflits (titre toujours conservé)
+| Code | Comportement |
+|---|---|
+| `version_conflict` | version actuelle affichée, titre conservé, **nouvelle confirmation** sur la version actualisée |
+| `already_converted` | fiche en lecture seule, « Voir la tâche » (`taskId`), titre rappelé dans le message |
+| `trashed` / `not_found` | message avec le titre ; fiche en mode corbeille ou « n'existe plus » |
+| `empty_title` / `title_too_long` | erreur sous le champ, panneau ouvert |
+| autres (`storage`) | « Votre titre est conservé : réessayez », panneau ouvert |
+| `converted` (enregistrer, corbeille) | notice, fiche rafraîchie en lecture seule, brouillon visible |
+
+### Doubles validations et opérations
+Verrou `inFlight` partagé avec l'enregistrement et la corbeille ; opération déclarée à `track` (la fermeture de la fenêtre l'attend) ; bouton désactivé « Création… », champ en lecture seule pendant l'envoi.
+
+### Fichiers
+`src/features/inbox/` : `api.ts` (types `Task`, `Conversion`, wrappers, `taskId` dans l'erreur), `CaptureDetail.tsx` + `.css` (panneau, protections, fiche convertie), `InboxHome.tsx` (notification généralisée, vue et fiche des tâches), `InboxPanel.tsx` (lien), `PagedCaptureView.tsx` (générique, rendu personnalisable ; usage historique inchangé), `TaskCard.tsx`, `TaskDetail.tsx` (nouveaux) ; `src/components/LeaveBanner.tsx` (« Enregistrer » facultatif) ; `src/test/fakeBackend.ts` (règles de 002-A). Rust : aucun code de production modifié ; test de répétition `storage/rehearsal_tests.rs`.
+
+### Tests
+- Interface : 213 réussis (171 existants + 28 conversion/protections + 14 tâches).
+- Rust : 121 réussis, 2 ignorés par conception (sous-processus ; répétition sur copie).
+- Vérification visuelle Edge sur base fictive (1000, 700 et 380 px) : panneau, avertissement, conversion, annulation, liste, fiche ; aucun défilement horizontal, boutons visibles, notification sans recouvrement du champ, mouvement réduit.
+
+### Répétition de migration sur copie isolée (préparée, non exécutée sur des données personnelles)
+Test Rust `repetition_sur_copie_isolee`, `#[ignore]`, paramétré par `MORGANISER_REHEARSAL_DB` : refuse tout chemin sous `%LOCALAPPDATA%` / `%APPDATA%` ou dans un dossier `com.morganiser*` ; **n'ouvre jamais** le fichier fourni (travaille sur une copie temporaire) ; migre avec sauvegarde, compare tables et empreintes, joue conversion/annulation/reconversion, restaure depuis la sauvegarde ; vérifie que les fichiers source n'ont pas changé ; n'affiche que des comptes et des empreintes. Le dispositif lui-même est testé sur une base fictive.
+
+### Limites
+- La conversion n'a pas été essayée dans l'application Windows avec la base Dev (interdit tant que la copie isolée n'a pas été répétée).
+- Pas de vue « Traitées » ni de « Remettre dans la boîte » depuis la liste (002-C) ; une capture convertie ouverte par une liste périmée est en lecture seule avec « Voir la tâche ».
+- Fiche de tâche en lecture seule ; aucune édition ni changement de statut (003).
+- À 360×480 la boîte reste très petite (limite préexistante, voir 001-E).

@@ -118,10 +118,19 @@
   color: var(--color-text-muted);
 }
 
+/*
+ * Les actions restent visibles : la fiche défile dans un panneau de hauteur limitée (fenêtre de
+ * 640 px), et « Enregistrer », « Transformer », « Corbeille » ne doivent jamais être cachés en bas.
+ */
 .detail__actions {
+  position: sticky;
+  bottom: calc(var(--space-4) * -1);
+  z-index: 1;
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-2);
+  padding: var(--space-2) 0;
+  background: var(--color-surface);
 }
 
 .detail__hint {
@@ -151,4 +160,73 @@
   .detail__close-narrow {
     display: inline;
   }
+}
+
+.detail__actions[hidden] {
+  display: none;
+}
+
+.detail .detail__convert-open {
+  border-color: var(--color-accent);
+  color: var(--color-accent-strong);
+}
+
+.detail__banner p + button {
+  margin-top: var(--space-2);
+}
+
+.detail__field input[type="text"] {
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+}
+
+.detail__field input[type="text"]:focus-visible {
+  outline: none;
+  border-color: var(--color-focus);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-focus) 35%, transparent);
+}
+
+.detail__field input[readonly] {
+  background: var(--color-surface-muted);
+}
+
+/* Panneau de conversion : dans la fiche, sans fenêtre modale ; il ne déplace aucun autre élément. */
+.detail__convert {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted);
+}
+
+.detail__convert-title {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.detail__recap {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+/* En conversion : le panneau est en haut, le texte figé reste visible mais plus compact. */
+.detail--converting .detail__field textarea {
+  min-height: 4rem;
+}
+
+.detail--converting .detail__dates,
+.detail--converting .detail__hint {
+  display: none;
+}
+
+.detail__convert-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
 }

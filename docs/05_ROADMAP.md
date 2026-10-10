@@ -23,7 +23,7 @@
 ## Brique 002 — Vie d'un élément capturé
 
 - **Périmètre décidé le 2026-10-10 :** convertir une capture en **tâche** uniquement (notes et projets attendent leurs modules) ; conserver la source ; annulation (4 s) ; vue « Traitées ». L'édition et la suppression élémentaires d'une capture sont traitées en 001-B.
-- **002-A** *(implémentée sur la branche `brique-002-preparation`, en attente de validation)* : migration 0002, tâche minimale, conversion et annulation atomiques, sauvegarde préalable aux migrations, commandes Rust. **002-B** : interface de conversion et première liste des tâches. **002-C** : vue « Traitées », provenance, restauration contrôlée.
+- **002-A** *(validée et fusionnée, PR #7)* : migration 0002, tâche minimale, conversion et annulation atomiques, sauvegarde préalable aux migrations, commandes Rust. **002-B** *(implémentée sur `brique-002b-interface`, en attente de validation)* : interface de conversion et première liste des tâches. **002-C** : vue « Traitées », provenance, restauration contrôlée.
 - **Critère :** aucune perte de texte pendant la conversion.
 - Voir `docs/briques/BRIQUE_002_VIE_ELEMENT_CAPTURE.md` (référence unique).
 

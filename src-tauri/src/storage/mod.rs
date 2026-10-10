@@ -164,6 +164,9 @@ pub fn open_in_memory() -> Connection {
 mod backup_tests;
 
 #[cfg(test)]
+mod rehearsal_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

@@ -338,6 +338,20 @@
 - **Tests (Rust) :** le test « donne quand même une sauvegarde contrôlée » devient « fait échouer la sauvegarde sans rien perdre » (3 tentatives exactement ; aucune sauvegarde finalisée pour la tentative ; deux sauvegardes antérieures intactes octet pour octet ; aucun `.partial` ; schéma de la source inchangé, toujours v1) ; +1 : source qui se stabilise à la 2ᵉ ou 3ᵉ tentative (succès, comparaison complète) ; +1 : `open` ne migre pas quand la sauvegarde échoue (v1, sans colonne `converted_at`).
 - **Résultats :** `cargo test` 117 réussis (1 ignoré par conception) ; `cargo clippy --all-targets` : 0 avertissement. Interface et TypeScript : aucun changement.
 
+## 2026-10-11 — Brique 002-B : interface de conversion en tâche et liste des tâches
+
+- **Objectif :** bouton « Transformer en tâche » dans la fiche, panneau intégré, titre suggéré et modifiable, notification « Annuler » 4 s, vue « Tâches » et fiche en lecture seule. Ni « Traitées » (002-C), ni édition (003), ni tableau de bord (006).
+- **Décisions du propriétaire (2026-10-10/11) :** titre de conversion = vrai brouillon protégé (pas de perte silencieuse) ; ordre de la liste plus ancienne en haut ; `PagedCaptureView` réutilisé sans refonte ; une PR en B1 → B4 ; test de répétition de migration préparé mais non exécuté ; pas de chemin de données alternatif dans `environment.rs`.
+- **Fichiers :** voir fiche 002, section 11. Rust : seul un test ignoré par défaut est ajouté (`storage/rehearsal_tests.rs`) ; aucun code de production Rust modifié.
+- **Fonctionnement expliqué simplement :** depuis la fiche, « Transformer en tâche » ouvre un petit panneau où l'on confirme ou modifie le titre ; « Créer la tâche » appelle Rust, et seulement après sa réponse la carte quitte la boîte. Un titre modifié est protégé comme un texte non enregistré. « Annuler » dans la notification remet la capture dans la boîte. « Tâches » (à côté de « Corbeille ») montre les tâches créées, en consultation.
+- **Défaut trouvé à la vérification visuelle et corrigé :** à 640 px de haut, « Transformer » et « Créer la tâche » sortaient de la zone visible de la fiche (déjà le cas de « Enregistrer » et « Corbeille » avant 002-B). Panneau placé en haut de la fiche, récapitulatif compact, actions collantes en bas.
+- **Tests :** interface 213/213 (+42 : 28 conversion et protections, 14 tâches) ; `pnpm typecheck` OK ; Rust 121 réussis + 2 ignorés par conception (+6 : répétition de migration, dispositif et garde-fous sur base fictive) ; Clippy : 0 avertissement.
+- **Vérification visuelle (Edge, base fictive en mémoire, 1000/700/380 px) :** ouverture du panneau, avertissement de titre, conversion, annulation, reconversion, liste, fiche de tâche ; position de la capture rapide inchangée à 1000 px ; aucun défilement horizontal ; notification sans recouvrement du champ ; mouvement réduit (carte retirée immédiatement).
+- **Données :** aucune base Dev ni Stable réelle ouverte, lue, copiée ni migrée ; application Windows non lancée.
+- **Limites :** voir fiche 002, section 11.
+- **Validation du propriétaire :** en attente.
+- **Prochaine étape :** essai de migration sur copie isolée (autorisation distincte), puis 002-C.
+
 ## Modèle à recopier après chaque brique
 
 ### AAAA-MM-JJ — Brique XXX : [nom]

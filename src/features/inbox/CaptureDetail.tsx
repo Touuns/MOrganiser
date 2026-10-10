@@ -8,11 +8,14 @@ import {
   type Ref,
 } from "react";
 import {
+  convertInboxItemToTask,
   getInboxItem,
   InboxApiError,
   restoreInboxItem,
+  suggestTaskTitle,
   trashInboxItem,
   updateInboxItem,
+  type Conversion,
   type Destination,
   type InboxItem,
 } from "./api";
@@ -42,6 +45,15 @@ export interface CaptureDetailHandle {
   refresh: () => Promise<void>;
 }
 
+/** Brouillon de la conversion : le titre saisi est une vraie saisie de l'utilisateur. */
+interface ConversionDraft {
+  open: boolean;
+  title: string;
+  /** Le titre a été modifié par l'utilisateur : il est protégé comme un texte non enregistré. */
+  edited: boolean;
+}
+const NO_CONVERSION: ConversionDraft = { open: false, title: "", edited: false };
+
 interface CaptureDetailProps {
   item: InboxItem;
   destinations: Destination[];
@@ -50,12 +62,19 @@ interface CaptureDetailProps {
   /** `closeSheet` : la fiche d'origine est toujours ouverte, sans saisie récente : elle peut se fermer. */
   onTrashed: (item: InboxItem, closeSheet: boolean) => void;
   onRestored: (item: InboxItem) => void;
+  /**
+   * La conversion en tâche est CONFIRMÉE par Rust. `closeSheet` : la fiche est toujours là et
+   * peut se fermer.
+   */
+  onConverted: (conversion: Conversion, closeSheet: boolean) => void;
+  /** Ouvre la tâche issue de cette capture (capture déjà convertie). */
+  onOpenTask: (taskId: string) => void;
   /** Déclare une opération d'écriture en cours (la fermeture de la fenêtre l'attend). */
   track: <T>(operation: Promise<T>) => Promise<T>;
   ref?: Ref<CaptureDetailHandle>;
 }
 
-type Busy = "save" | "trash" | "restore" | null;
+type Busy = "save" | "trash" | "restore" | "convert" | null;
 interface PendingLeave {
   proceed: (outcome: LeaveOutcome) => void;
   cancel?: () => void;
@@ -70,7 +89,7 @@ interface PendingLeave {
  * depuis l'envoi. À remonter avec `key={item.id}` pour changer de capture.
  */
 export function CaptureDetail(props: CaptureDetailProps) {
-  const { item, destinations, onClose, onSaved, onTrashed, onRestored, track } = props;
+  const { item, destinations, onClose, onSaved, onTrashed, onRestored, onConverted, onOpenTask, track } = props;
   const [baseline, setBaselineState] = useState(item);
   const [text, setTextState] = useState(item.content);
   const [destinationId, setDestinationState] = useState(item.destinationId ?? "");
@@ -79,6 +98,11 @@ export function CaptureDetail(props: CaptureDetailProps) {
   const [notice, setNotice] = useState<string | null>(null);
   const [goneState, setGoneState] = useState(false);
   const [leave, setLeaveState] = useState<PendingLeave | null>(null);
+  const [conversion, setConversionState] = useState<ConversionDraft>(NO_CONVERSION);
+  const [conversionError, setConversionError] = useState<string | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
+  // Identifie la demande de titre en cours : une réponse d'une demande périmée est ignorée.
+  const suggestion = useRef(0);
   const inFlight = useRef(false);
   const mounted = useRef(true);
   // Modèle « source de vérité immédiate » : mis à jour au même instant que l'état React, donc
@@ -89,13 +113,20 @@ export function CaptureDetail(props: CaptureDetailProps) {
     destinationId: item.destinationId ?? "",
     gone: false,
     leave: null as PendingLeave | null,
+    conversion: NO_CONVERSION,
   });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const titleRef = useRef<HTMLInputElement>(null);
+  const convertButtonRef = useRef<HTMLButtonElement>(null);
+  const panelWasOpen = useRef(false);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const headingId = useId();
   const textId = useId();
   const destinationFieldId = useId();
   const errorId = useId();
+  const conversionHeadingId = useId();
+  const titleFieldId = useId();
+  const titleErrorId = useId();
 
   function setBaseline(next: InboxItem) {
     model.current.baseline = next;
@@ -115,21 +146,34 @@ export function CaptureDetail(props: CaptureDetailProps) {
     model.current.leave = next;
     setLeaveState(next);
   }
+  function setConversion(next: ConversionDraft) {
+    model.current.conversion = next;
+    setConversionState(next);
+  }
   /** Le brouillon diverge de la référence enregistrée (état immédiat, pas celui du rendu). */
   const isDirty = () =>
     model.current.text !== model.current.baseline.content ||
     model.current.destinationId !== (model.current.baseline.destinationId ?? "");
+  /** Un titre de tâche modifié par l'utilisateur et non validé. */
+  const titleDraft = () => model.current.conversion.open && model.current.conversion.edited;
+  /** Tout ce qu'un départ pourrait faire perdre : texte, destination ou titre de conversion. */
+  const hasDraft = () => isDirty() || titleDraft();
 
   const trashed = baseline.deletedAt !== null;
+  const converted = baseline.convertedAt !== null;
   const dirty = text !== baseline.content || destinationId !== (baseline.destinationId ?? "");
-  const editable = !trashed && !goneState;
+  const converting = conversion.open;
+  // Pendant la conversion, texte et destination sont figés : on convertit la version enregistrée.
+  const editable = !trashed && !goneState && !converted && !converting;
+  const titleEdited = conversion.open && conversion.edited;
 
   useImperativeHandle(props.ref, () => ({
-    hasUnsaved: () => isDirty(),
+    hasUnsaved: () => hasDraft(),
     draftKey: () =>
-      `${model.current.baseline.id}\u0000${model.current.text}\u0000${model.current.destinationId}`,
+      `${model.current.baseline.id}\u0000${model.current.text}\u0000${model.current.destinationId}` +
+      `\u0000${titleDraft() ? model.current.conversion.title : ""}`,
     requestLeave(proceed, cancel) {
-      if (isDirty()) setLeave({ proceed, cancel });
+      if (hasDraft()) setLeave({ proceed, cancel });
       else proceed("clean");
     },
     refresh: async () => {
@@ -155,6 +199,13 @@ export function CaptureDetail(props: CaptureDetailProps) {
     try {
       const fresh = await getInboxItem(model.current.baseline.id);
       setBaseline(fresh);
+      // Corbeille ou conversion survenue ailleurs : le panneau n'a plus de sens. Un titre
+      // personnalisé n'est jamais effacé en silence : il est rappelé dans le message.
+      if (model.current.conversion.open && (fresh.deletedAt !== null || fresh.convertedAt !== null)) {
+        const title = model.current.conversion.edited ? model.current.conversion.title : "";
+        closeConversion();
+        if (title !== "") setNotice(`La conversion n'est plus possible. Votre titre : « ${title} ».`);
+      }
       return fresh;
     } catch {
       return null;
@@ -225,7 +276,8 @@ export function CaptureDetail(props: CaptureDetailProps) {
       setBusy(null);
     }
     // Après la libération du verrou : l'action enchaînée (ex. corbeille) peut s'exécuter.
-    if (safe) finishLeave("saved");
+    // Un titre de conversion encore non validé retient le départ : la bannière reste affichée.
+    if (safe && !titleDraft()) finishLeave("saved");
     return safe;
   }
 
@@ -242,6 +294,9 @@ export function CaptureDetail(props: CaptureDetailProps) {
     } else if (code === "trashed") {
       await refreshBaseline();
       setNotice("Cette capture a été mise à la corbeille. Votre brouillon est conservé.");
+    } else if (code === "converted") {
+      await refreshBaseline();
+      setNotice("Cette capture a été transformée en tâche : elle est désormais en lecture seule.");
     } else if (code === "not_found") {
       setGone(true);
       setError("Cette capture n'existe plus. Votre texte est conservé ci-dessous.");
@@ -270,8 +325,13 @@ export function CaptureDetail(props: CaptureDetailProps) {
       // La fiche ne se ferme que si elle est toujours là et sans saisie récente.
       onTrashed(trashedItem, mounted.current && !typedMeanwhile);
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : "La mise à la corbeille a échoué.";
-      setError(`${message} La capture n'a pas été déplacée.`);
+      if (cause instanceof InboxApiError && cause.code === "converted") {
+        await refreshBaseline();
+        setNotice("Cette capture a été transformée en tâche : elle ne peut plus aller à la corbeille.");
+      } else {
+        const message = cause instanceof Error ? cause.message : "La mise à la corbeille a échoué.";
+        setError(`${message} La capture n'a pas été déplacée.`);
+      }
     } finally {
       inFlight.current = false;
       setBusy(null);
@@ -305,9 +365,149 @@ export function CaptureDetail(props: CaptureDetailProps) {
   }
 
   function askLeave(proceed: (outcome: LeaveOutcome) => void) {
-    if (isDirty()) setLeave({ proceed });
+    if (hasDraft()) setLeave({ proceed });
     else proceed("clean");
   }
+
+  // --- Conversion en tâche ---
+
+  /** Ferme le panneau et abandonne son brouillon (décision déjà prise par l'appelant). */
+  function closeConversion() {
+    suggestion.current += 1; // une réponse de titre encore attendue n'a plus d'objet
+    setConversion(NO_CONVERSION);
+    setConversionError(null);
+    setSuggesting(false);
+  }
+
+  /** Ouvre le panneau sur la version ENREGISTRÉE (le brouillon du texte a déjà été réglé). */
+  function openConversion() {
+    if (model.current.baseline.deletedAt !== null || model.current.baseline.convertedAt !== null) return;
+    const mine = ++suggestion.current;
+    setConversion({ open: true, title: "", edited: false });
+    setConversionError(null);
+    setError(null);
+    setNotice(null);
+    setSuggesting(true);
+    suggestTaskTitle(model.current.baseline.id)
+      .then((title) => {
+        // Jamais d'écrasement d'un titre que l'utilisateur a commencé à modifier.
+        if (mine !== suggestion.current) return;
+        const current = model.current.conversion;
+        if (current.open && !current.edited) setConversion({ open: true, title, edited: false });
+      })
+      .catch((cause: unknown) => {
+        if (mine !== suggestion.current || model.current.conversion.edited) return;
+        const message = cause instanceof Error ? cause.message : "Le titre n'a pas pu être proposé.";
+        setConversionError(`${message} Saisissez le titre de la tâche.`);
+      })
+      .finally(() => {
+        if (mine === suggestion.current) setSuggesting(false);
+      });
+  }
+
+  /** Clic sur « Transformer en tâche » : le brouillon du texte est réglé AVANT d'ouvrir le panneau. */
+  function startConversion() {
+    if (inFlight.current || converting) return;
+    askLeave((outcome) => {
+      if (outcome === "discarded") revert();
+      openConversion();
+    });
+  }
+
+  /** « Annuler » : choix explicite d'abandonner la conversion (et son titre). */
+  function abandonConversion() {
+    if (inFlight.current) return;
+    closeConversion();
+  }
+
+  function editTitle(next: string) {
+    setConversion({ open: true, title: next, edited: true });
+    setConversionError(null);
+  }
+
+  async function convert() {
+    const draft = model.current.conversion;
+    const version = model.current.baseline;
+    if (inFlight.current || !draft.open || version.deletedAt !== null || version.convertedAt !== null || model.current.gone) {
+      return;
+    }
+    if (draft.title.trim() === "") {
+      setConversionError("Le titre de la tâche est vide.");
+      return;
+    }
+    inFlight.current = true;
+    setBusy("convert");
+    setConversionError(null);
+    setError(null);
+    setNotice(null);
+    try {
+      // Version ENREGISTRÉE vue par l'utilisateur ; le succès n'existe qu'après Rust.
+      const result = await track(convertInboxItemToTask(version.id, version.updatedAt, draft.title));
+      setBaseline(result.item);
+      setDraft(result.item.content, result.item.destinationId ?? "");
+      closeConversion();
+      onConverted(result, mounted.current);
+    } catch (cause) {
+      await explainConversionFailure(cause, draft.title);
+    } finally {
+      inFlight.current = false;
+      setBusy(null);
+    }
+  }
+
+  async function explainConversionFailure(cause: unknown, title: string) {
+    const code = cause instanceof InboxApiError ? cause.code : "unknown";
+    const message = cause instanceof Error ? cause.message : "La conversion a échoué.";
+    const remember = `Votre titre : « ${title} ».`;
+    if (code === "version_conflict") {
+      // La capture a changé : version actuelle affichée, titre conservé, nouvelle confirmation.
+      const fresh = await refreshBaseline();
+      if (fresh && fresh.deletedAt === null && fresh.convertedAt === null) {
+        setDraft(fresh.content, fresh.destinationId ?? "");
+        setNotice(
+          "Cette capture a changé depuis son ouverture. Vérifiez le texte ci-dessus puis confirmez de " +
+            "nouveau : votre titre est conservé.",
+        );
+      }
+    } else if (code === "already_converted") {
+      await refreshBaseline(); // la fiche passe en lecture seule, avec « Voir la tâche »
+      closeConversion();
+      setNotice(`Cette capture est déjà transformée en tâche. ${remember}`);
+    } else if (code === "trashed") {
+      await refreshBaseline();
+      closeConversion();
+      setNotice(`Cette capture a été mise à la corbeille : restaurez-la pour la transformer. ${remember}`);
+    } else if (code === "not_found") {
+      setGone(true);
+      closeConversion();
+      setError(`Cette capture n'existe plus. ${remember}`);
+    } else if (code === "empty_title" || code === "title_too_long") {
+      setConversionError(message);
+    } else {
+      setError(`${message} Votre titre est conservé : réessayez.`);
+    }
+  }
+
+  /** Escape dans le panneau : ferme le panneau, en protégeant un titre modifié. */
+  function leaveConversionPanel() {
+    if (titleDraft()) setLeave({ proceed: () => closeConversion() });
+    else closeConversion();
+  }
+
+  // Focus : titre à l'ouverture du panneau, bouton « Transformer » à sa fermeture.
+  useEffect(() => {
+    if (conversion.open && !panelWasOpen.current) titleRef.current?.focus({ preventScroll: true });
+    if (!conversion.open && panelWasOpen.current && mounted.current && !converted) {
+      convertButtonRef.current?.focus({ preventScroll: true });
+    }
+    panelWasOpen.current = conversion.open;
+  }, [conversion.open, converted]);
+  // La proposition arrivée (et non modifiée) est sélectionnée : une frappe la remplace.
+  useEffect(() => {
+    if (conversion.open && !suggesting && !conversion.edited) titleRef.current?.select();
+    // Seul l'arrivée de la proposition compte.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [suggesting]);
 
   function decide(choice: "save" | "discard" | "keep") {
     if (!model.current.leave) return;
@@ -328,7 +528,15 @@ export function CaptureDetail(props: CaptureDetailProps) {
     if (event.key === "Escape") {
       event.stopPropagation();
       if (model.current.leave) dismissLeave();
+      else if (model.current.conversion.open) leaveConversionPanel();
       else askLeave(onClose);
+    }
+  }
+
+  function handleTitleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      void convert();
     }
   }
 
@@ -340,16 +548,21 @@ export function CaptureDetail(props: CaptureDetailProps) {
   }
 
   const message = error ?? notice;
+  const destinationLabel =
+    destinations.find((d) => d.id === destinationId)?.label ?? (destinationId === "" ? "Aucune" : destinationId);
+  // Avertissement de départ : pendant le panneau le texte est figé, donc soit le texte (hors
+  // panneau), soit le titre de conversion est en jeu, jamais les deux.
+  const leaveMode = titleEdited ? "title" : "text";
 
   return (
     <section
-      className="detail"
+      className={converting ? "detail detail--converting" : "detail"}
       aria-labelledby={headingId}
       onKeyDown={handleKeyDown}
     >
       <header className="detail__header">
         <h2 id={headingId} className="detail__title" tabIndex={-1} ref={headingRef}>
-          {trashed ? "Capture dans la corbeille" : "Fiche de la capture"}
+          {trashed ? "Capture dans la corbeille" : converted ? "Capture transformée en tâche" : "Fiche de la capture"}
         </h2>
         <button
           type="button"
@@ -368,10 +581,14 @@ export function CaptureDetail(props: CaptureDetailProps) {
 
       {leave && (
         <LeaveBanner
-          message="Vous avez des modifications non enregistrées."
-          saveLabel="Enregistrer"
-          discardLabel="Abandonner les modifications"
-          keepLabel="Continuer à modifier"
+          message={
+            leaveMode === "title"
+              ? "Vous avez un titre de tâche non validé."
+              : "Vous avez des modifications non enregistrées."
+          }
+          saveLabel={leaveMode === "title" ? undefined : "Enregistrer"}
+          discardLabel={leaveMode === "title" ? "Abandonner la conversion" : "Abandonner les modifications"}
+          keepLabel={leaveMode === "title" ? "Continuer" : "Continuer à modifier"}
           saving={busy === "save"}
           onSave={() => decide("save")}
           onDiscard={() => decide("discard")}
@@ -384,6 +601,67 @@ export function CaptureDetail(props: CaptureDetailProps) {
           Dans la corbeille depuis le {formatLong(baseline.deletedAt!)}. Elle ne s'affiche plus
           dans « À organiser ».
         </p>
+      )}
+
+      {converted && !trashed && (
+        <div className="detail__banner">
+          <p>
+            Transformée en tâche le {formatLong(baseline.convertedAt!)}. Cette capture est conservée en
+            lecture seule.
+          </p>
+          {baseline.convertedTaskId && (
+            <button type="button" onClick={() => onOpenTask(baseline.convertedTaskId as string)}>
+              Voir la tâche
+            </button>
+          )}
+        </div>
+      )}
+
+      {converting && (
+        <section className="detail__convert" aria-labelledby={conversionHeadingId}>
+          <h3 id={conversionHeadingId} className="detail__convert-title">
+            Transformer en tâche
+          </h3>
+          <div className="detail__field">
+            <label htmlFor={titleFieldId}>Titre de la tâche</label>
+            <input
+              id={titleFieldId}
+              ref={titleRef}
+              type="text"
+              value={conversion.title}
+              onChange={(event) => editTitle(event.target.value)}
+              onKeyDown={handleTitleKeyDown}
+              readOnly={busy === "convert"}
+              maxLength={120}
+              placeholder={suggesting ? "Titre proposé en cours de calcul…" : ""}
+              aria-describedby={conversionError ? titleErrorId : undefined}
+              aria-invalid={conversionError ? true : undefined}
+            />
+          </div>
+          <p className="detail__recap">
+            Le texte complet est conservé tel quel, avec sa destination ({destinationLabel}). La capture
+            d'origine reste conservée et retrouvable.
+          </p>
+          {conversionError && (
+            <p id={titleErrorId} className="detail__error" role="alert">
+              {conversionError}
+            </p>
+          )}
+          <div className="detail__convert-actions">
+            <button
+              type="button"
+              className="detail__primary"
+              onClick={() => void convert()}
+              disabled={busy !== null || conversion.title.trim() === ""}
+              aria-busy={busy === "convert"}
+            >
+              {busy === "convert" ? "Création…" : "Créer la tâche"}
+            </button>
+            <button type="button" onClick={abandonConversion} disabled={busy !== null}>
+              Annuler la conversion
+            </button>
+          </div>
+        </section>
       )}
 
       <div className="detail__field">
@@ -439,7 +717,7 @@ export function CaptureDetail(props: CaptureDetailProps) {
         </p>
       )}
 
-      <div className="detail__actions">
+      <div className="detail__actions" hidden={converting || (converted && !trashed)}>
         {trashed ? (
           <>
             <button type="button" className="detail__primary" onClick={() => void restore()} disabled={busy !== null}>
@@ -467,6 +745,15 @@ export function CaptureDetail(props: CaptureDetailProps) {
             </button>
             <button
               type="button"
+              ref={convertButtonRef}
+              className="detail__convert-open"
+              onClick={startConversion}
+              disabled={busy !== null || goneState || text.trim() === ""}
+            >
+              Transformer en tâche
+            </button>
+            <button
+              type="button"
               className="detail__danger"
               onClick={() => askLeave(() => void trash())}
               disabled={busy !== null || goneState}
@@ -476,7 +763,13 @@ export function CaptureDetail(props: CaptureDetailProps) {
           </>
         )}
       </div>
-      {!trashed && <p className="detail__hint">Ctrl+Entrée pour enregistrer · Échap pour fermer</p>}
+      {!trashed && !converted && (
+        <p className="detail__hint">
+          {converting
+            ? "Entrée pour créer la tâche · Échap pour fermer le panneau"
+            : "Ctrl+Entrée pour enregistrer · Échap pour fermer"}
+        </p>
+      )}
     </section>
   );
 }
