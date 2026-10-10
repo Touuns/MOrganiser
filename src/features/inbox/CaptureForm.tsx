@@ -35,7 +35,7 @@ export function CaptureForm(props: CaptureFormProps) {
   const [destinationId, setDestinationState] = useState("");
   // Valeurs immédiates : lisibles par une demande de fermeture ou une réponse tardive avant le
   // prochain rendu (sinon un texte déjà envoyé paraîtrait encore « non envoyé »).
-  const draft = useRef({ text: "", destinationId: "" });
+  const draft = useRef({ text: "", destinationId: "", keepDestination: false });
   function setText(next: string) {
     draft.current.text = next;
     setTextState(next);
@@ -43,6 +43,12 @@ export function CaptureForm(props: CaptureFormProps) {
   function setDestinationId(next: string) {
     draft.current.destinationId = next;
     setDestinationState(next);
+  }
+  // « Conserver ce choix » : propre à cette ouverture de l'application, jamais enregistré.
+  const [keepDestination, setKeepState] = useState(false);
+  function setKeepDestination(next: boolean) {
+    draft.current.keepDestination = next;
+    setKeepState(next);
   }
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -80,7 +86,10 @@ export function CaptureForm(props: CaptureFormProps) {
       // Ne vider que si rien n'a été modifié pendant l'envoi : une saisie faite
       // entre-temps n'est jamais perdue.
       if (draft.current.text === sentText) setText("");
-      if (draft.current.destinationId === sentDestination) setDestinationId("");
+      // « Conserver ce choix » est lu à cet instant (et non à l'envoi) : la destination reste en place.
+      if (!draft.current.keepDestination && draft.current.destinationId === sentDestination) {
+        setDestinationId("");
+      }
       textareaRef.current?.focus({ preventScroll: true });
       props.onSent?.();
       return true;
@@ -143,11 +152,24 @@ export function CaptureForm(props: CaptureFormProps) {
           <select
             id={destinationFieldId}
             value={destinationId}
-            onChange={(event) => setDestinationId(event.target.value)}
+            onChange={(event) => {
+              setDestinationId(event.target.value);
+              // « Aucune » n'a rien à conserver : l'option se désactive.
+              if (event.target.value === "") setKeepDestination(false);
+            }}
           >
             <option value="">Aucune</option>
             <DestinationOptions destinations={destinations} />
           </select>
+        </label>
+        <label className="capture__keep">
+          <input
+            type="checkbox"
+            checked={keepDestination}
+            disabled={destinationId === ""}
+            onChange={(event) => setKeepDestination(event.target.checked)}
+          />
+          <span>Conserver ce choix</span>
         </label>
         <span className="capture__hint" aria-hidden="true">
           Entrée pour envoyer · Maj+Entrée pour une nouvelle ligne

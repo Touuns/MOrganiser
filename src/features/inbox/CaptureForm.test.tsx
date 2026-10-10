@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { Destination } from "./api";
 import { CaptureForm } from "./CaptureForm";
@@ -25,7 +25,8 @@ function setup(onSubmit = vi.fn<(c: string, d: string | null) => Promise<void>>(
   const field = screen.getByLabelText("Capture rapide", { selector: "textarea" }) as HTMLTextAreaElement;
   const destination = screen.getByLabelText("Destination (facultatif)") as HTMLSelectElement;
   const send = screen.getByRole("button", { name: /Envoyer/ });
-  return { onSubmit, field, destination, send };
+  const keep = screen.getByLabelText("Conserver ce choix") as HTMLInputElement;
+  return { onSubmit, field, destination, send, keep };
 }
 
 const enter = (field: HTMLElement, init: KeyboardEventInit = {}) =>
@@ -145,5 +146,127 @@ describe("CaptureForm", () => {
     fireEvent.change(field, { target: { value: "Seconde idée en cours" } });
     await act(async () => pending.resolve());
     expect(field.value).toBe("Seconde idée en cours");
+  });
+
+  describe("Conserver ce choix", () => {
+    const type = (field: HTMLElement, value: string) => fireEvent.change(field, { target: { value } });
+
+    it("est décochée par défaut, et désactivée tant que la destination est « Aucune »", () => {
+      const { keep, destination } = setup();
+      expect(keep).not.toBeChecked();
+      expect(keep).toBeDisabled();
+      fireEvent.change(destination, { target: { value: "moi" } });
+      expect(keep).toBeEnabled();
+      expect(keep).not.toBeChecked();
+    });
+
+    it("décochée : la destination revient à Aucune après un envoi réussi", async () => {
+      const { field, destination, keep } = setup();
+      fireEvent.change(destination, { target: { value: "moi" } });
+      type(field, "Une idée");
+      enter(field);
+      await waitFor(() => expect(field.value).toBe(""));
+      expect(destination.value).toBe("");
+      expect(keep).not.toBeChecked();
+    });
+
+    it("cochée : la destination reste après plusieurs envois réussis", async () => {
+      const { onSubmit, field, destination, keep } = setup();
+      fireEvent.change(destination, { target: { value: "finances" } });
+      fireEvent.click(keep);
+      type(field, "Première");
+      enter(field);
+      await waitFor(() => expect(field.value).toBe(""));
+      type(field, "Seconde");
+      enter(field);
+      await waitFor(() => expect(field.value).toBe(""));
+      expect(onSubmit).toHaveBeenNthCalledWith(1, "Première", "finances");
+      expect(onSubmit).toHaveBeenNthCalledWith(2, "Seconde", "finances");
+      expect(destination.value).toBe("finances");
+      expect(keep).toBeChecked();
+      expect(field).toHaveFocus();
+    });
+
+    it("cochée : un changement manuel de destination est conservé à son tour", async () => {
+      const { onSubmit, field, destination, keep } = setup();
+      fireEvent.change(destination, { target: { value: "moi" } });
+      fireEvent.click(keep);
+      fireEvent.change(destination, { target: { value: "externe" } });
+      type(field, "Pour l'externe");
+      enter(field);
+      await waitFor(() => expect(field.value).toBe(""));
+      expect(onSubmit).toHaveBeenCalledWith("Pour l'externe", "externe");
+      expect(destination.value).toBe("externe");
+      expect(keep).toBeChecked();
+    });
+
+    it("choisir « Aucune » désactive la conservation", async () => {
+      const { field, destination, keep } = setup();
+      fireEvent.change(destination, { target: { value: "moi" } });
+      fireEvent.click(keep);
+      fireEvent.change(destination, { target: { value: "" } });
+      expect(keep).not.toBeChecked();
+      expect(keep).toBeDisabled();
+      fireEvent.change(destination, { target: { value: "finances" } });
+      expect(keep).not.toBeChecked();
+      type(field, "Texte");
+      enter(field);
+      await waitFor(() => expect(field.value).toBe(""));
+      expect(destination.value).toBe("");
+    });
+
+    it("décocher garde la destination en cours, réinitialisée à l'envoi suivant", async () => {
+      const { field, destination, keep } = setup();
+      fireEvent.change(destination, { target: { value: "moi" } });
+      fireEvent.click(keep);
+      fireEvent.click(keep);
+      expect(destination.value).toBe("moi");
+      type(field, "Texte");
+      enter(field);
+      await waitFor(() => expect(field.value).toBe(""));
+      expect(destination.value).toBe("");
+    });
+
+    it("échec de sauvegarde : texte, destination et option conservés, puis maintenus au succès", async () => {
+      const onSubmit = vi
+        .fn<(c: string, d: string | null) => Promise<void>>()
+        .mockRejectedValueOnce(new Error("Échec"))
+        .mockResolvedValueOnce();
+      const { field, destination, keep } = setup(onSubmit);
+      fireEvent.change(destination, { target: { value: "externe" } });
+      fireEvent.click(keep);
+      type(field, "À garder");
+      enter(field);
+      await screen.findByRole("alert");
+      expect(field.value).toBe("À garder");
+      expect(destination.value).toBe("externe");
+      expect(keep).toBeChecked();
+      enter(field);
+      await waitFor(() => expect(field.value).toBe(""));
+      expect(destination.value).toBe("externe");
+      expect(keep).toBeChecked();
+    });
+
+    it("cochée pendant un envoi en cours : la destination n'est pas effacée au retour", async () => {
+      const pending = deferred();
+      const onSubmit = vi.fn<(c: string, d: string | null) => Promise<void>>().mockReturnValue(pending.promise);
+      const { field, destination, keep } = setup(onSubmit);
+      fireEvent.change(destination, { target: { value: "moi" } });
+      type(field, "Texte");
+      enter(field);
+      fireEvent.click(keep);
+      await act(async () => pending.resolve());
+      expect(destination.value).toBe("moi");
+    });
+
+    it("n'est pas mémorisée : une nouvelle ouverture repart sans conservation", () => {
+      const first = setup();
+      fireEvent.change(first.destination, { target: { value: "moi" } });
+      fireEvent.click(first.keep);
+      cleanup();
+      const second = setup();
+      expect(second.keep).not.toBeChecked();
+      expect(second.destination.value).toBe("");
+    });
   });
 });
