@@ -513,8 +513,10 @@ export function CaptureDetail(props: CaptureDetailProps) {
     if (!model.current.leave) return;
     if (choice === "keep") {
       dismissLeave();
-      // Le bouton disparaît : on rend le focus au texte, pour poursuivre au clavier.
-      textareaRef.current?.focus({ preventScroll: true });
+      // Le bouton disparaît : on rend le focus au champ à poursuivre au clavier. Pendant la
+      // conversion le texte est en lecture seule : c'est alors le titre qui est en jeu.
+      if (model.current.conversion.open) titleRef.current?.focus({ preventScroll: true });
+      else textareaRef.current?.focus({ preventScroll: true });
     } else if (choice === "discard") {
       finishLeave("discarded");
     } else {

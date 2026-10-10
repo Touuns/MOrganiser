@@ -78,6 +78,9 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
   selectedTaskRef.current = selectedTask;
   // Seule la réponse de la dernière demande est affichée (changements de filtre rapides).
   const lastRequest = useRef(0);
+  // Identité des notifications : compteur monotone (deux événements dans la même milliseconde
+  // ne partagent jamais la clé, donc la minuterie de 4 s repart toujours).
+  const toastSequence = useRef(0);
   const detailRef = useRef<CaptureDetailHandle>(null);
   const formRef = useRef<CaptureFormHandle>(null);
   const panelRef = useRef<InboxPanelHandle>(null);
@@ -383,7 +386,7 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
       closeDetail();
     } else refreshOpenSheet(item.id);
     setDeparture({ id: item.id, moveFocus: closing });
-    setToast({ id: Date.now(), kind: "convert", itemId: item.id, taskId: task.id });
+    setToast({ id: ++toastSequence.current, kind: "convert", itemId: item.id, taskId: task.id });
     setStatus(null);
     changed();
   }
@@ -581,7 +584,7 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
                 } else refreshOpenSheet(item.id);
                 // Disparition en fondu de SA carte, après l'enregistrement en base (jamais avant).
                 setDeparture({ id: item.id, moveFocus: closing });
-                setToast({ id: Date.now(), kind: "trash", itemId: item.id });
+                setToast({ id: ++toastSequence.current, kind: "trash", itemId: item.id });
                 setStatus(null);
                 changed();
               }}

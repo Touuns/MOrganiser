@@ -278,6 +278,28 @@ describe("002-B — protection du brouillon et du titre", () => {
     expect(backend.state.tasks).toHaveLength(0);
   });
 
+  it("« Continuer » redonne le focus au titre (le texte est en lecture seule pendant le panneau)", async () => {
+    backend.seed("Capture");
+    render(<InboxHome />);
+    await openPanel("Capture", "Capture");
+    fireEvent.change(titleInput(), { target: { value: "Titre perso" } });
+    fireEvent.click(within(detail()).getByRole("button", { name: "Fermer la fiche" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continuer" }));
+    await waitFor(() => expect(titleInput()).toHaveFocus());
+    expect(titleInput()).toHaveValue("Titre perso");
+    expect(detailText()).not.toHaveFocus();
+  });
+
+  it("« Continuer à modifier » le texte garde le focus sur le texte (comportement 001-B)", async () => {
+    backend.seed("Texte");
+    render(<InboxHome />);
+    await openCard("Texte");
+    fireEvent.change(detailText(), { target: { value: "Texte modifié" } });
+    fireEvent.click(within(detail()).getByRole("button", { name: "Fermer la fiche" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Continuer à modifier" }));
+    expect(detailText()).toHaveFocus();
+  });
+
   it("titre non modifié + Échap : le panneau se ferme sans avertissement", async () => {
     backend.seed("Capture");
     render(<InboxHome />);
@@ -482,6 +504,27 @@ describe("002-B — réponses asynchrones et conflits", () => {
     expect(await within(detail()).findByRole("alert")).toHaveTextContent("transformée en tâche");
     expect(backend.find(item.id)!.content).toBe("Texte"); // rien d'écrasé
     expect(detailText()).toHaveValue("Texte modifié"); // brouillon visible, jamais perdu
+  });
+});
+
+describe("002-B — notifications successives", () => {
+  it("une nouvelle notification remplace la précédente et relance la minuterie, même à horodatage identique", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000); // deux événements « au même instant »
+    backend.seed("Première");
+    backend.seed("Seconde");
+    render(<InboxHome />);
+    await openPanel("Première", "Première");
+    fireEvent.click(createButton());
+    const first = (await screen.findByText("Transformée en tâche")).closest(".toast") as HTMLElement;
+
+    await openPanel("Seconde", "Seconde");
+    fireEvent.click(createButton());
+    await waitFor(() => expect(backend.state.tasks).toHaveLength(2));
+    await waitFor(() => expect(first.isConnected).toBe(false)); // l'ancienne est démontée
+    const toasts = document.querySelectorAll(".toast");
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0]).not.toBe(first); // nouvelle instance : sa minuterie de 4 s repart
+    vi.restoreAllMocks();
   });
 });
 
