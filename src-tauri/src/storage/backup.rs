@@ -78,16 +78,18 @@ pub(super) fn before_migration_with(
         let _ = fs::remove_file(&partial); // cible neuve à chaque essai
         match write_and_verify(source, &partial, from_version, attempt, after_copy) {
             Ok(Verified::Complete) => break,
-            // La source a changé PENDANT la copie : la comparaison de contenu n'a pas de sens.
-            // On reprend une copie neuve ; au dernier essai, la copie (instantané cohérent par
-            // construction, et contrôlée en interne) est acceptée sans comparaison.
+            // La source a changé PENDANT la copie : la copie est cohérente mais peut ne pas
+            // contenir toutes les transactions présentes au moment où la migration va commencer.
+            // On reprend une copie neuve ; si la source bouge encore au dernier essai, le point
+            // de restauration ne peut pas être validé : la sauvegarde échoue, donc PAS de migration.
             Ok(Verified::SourceChanged) if attempt < MAX_ATTEMPTS => continue,
             Ok(Verified::SourceChanged) => {
-                eprintln!(
-                    "[M'Organiser] la base a été modifiée pendant la sauvegarde : copie acceptée \
-                     après contrôles d'intégrité, sans comparaison ligne à ligne"
-                );
-                break;
+                let _ = fs::remove_file(&partial);
+                return Err(format!(
+                    "la base a été modifiée par une autre connexion pendant chacune des \
+                     {MAX_ATTEMPTS} tentatives de sauvegarde ; la migration est refusée, \
+                     réessayez au prochain lancement"
+                ));
             }
             Err(error) => {
                 let _ = fs::remove_file(&partial);

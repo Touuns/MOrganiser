@@ -331,6 +331,13 @@
 - **Contrôle 3, permissions Tauri :** conformes. 15 fichiers générés (9 + 6) ; chacun des 6 nouveaux contient exactement `allow-<commande>` et `deny-<commande>` pour sa seule commande ; la capacité contient 15 `allow-*` (une par commande) et les 3 permissions `core:*` revues, rien d'autre.
 - **Tests après correction :** `cargo test` 115 réussis (1 ignoré par conception). Interface et TypeScript non concernés (aucun changement) : 171/171 et propres à la livraison initiale.
 
+### 2026-10-10 — 002-A : correctif de la revue GitHub (politique de sauvegarde prudente)
+
+- **Constat de la revue :** au troisième essai, une source encore modifiée par une autre connexion était acceptée après les seuls contrôles internes. La copie est cohérente mais peut ne pas contenir toutes les transactions présentes quand la migration commence. Cette acceptation **remplace** celle décrite dans l'entrée précédente (« copie acceptée au dernier essai »).
+- **Correction (`storage/backup.rs`, périmètre 002-A) :** source stable et contrôles réussis → sauvegarde acceptée ; source modifiée pendant un essai → nouvelle copie, 3 essais au plus ; **source encore modifiée au troisième essai → erreur explicite, donc migration refusée**. La copie temporaire est supprimée, les sauvegardes existantes ne sont ni supprimées ni modifiées, la base source n'est pas touchée par le mécanisme. Rien d'autre n'a changé.
+- **Tests (Rust) :** le test « donne quand même une sauvegarde contrôlée » devient « fait échouer la sauvegarde sans rien perdre » (3 tentatives exactement ; aucune sauvegarde finalisée pour la tentative ; deux sauvegardes antérieures intactes octet pour octet ; aucun `.partial` ; schéma de la source inchangé, toujours v1) ; +1 : source qui se stabilise à la 2ᵉ ou 3ᵉ tentative (succès, comparaison complète) ; +1 : `open` ne migre pas quand la sauvegarde échoue (v1, sans colonne `converted_at`).
+- **Résultats :** `cargo test` 117 réussis (1 ignoré par conception) ; `cargo clippy --all-targets` : 0 avertissement. Interface et TypeScript : aucun changement.
+
 ## Modèle à recopier après chaque brique
 
 ### AAAA-MM-JJ — Brique XXX : [nom]

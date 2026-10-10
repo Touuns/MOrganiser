@@ -105,7 +105,8 @@ Module `src-tauri/src/storage/backup.rs`, appelé par `storage::open` **avant** 
 2. Écriture dans `backups/morganiser-v<version>-<ms>.db.partial`, vérifiée, puis **renommage** : un `.partial` n'est jamais une sauvegarde. Un reste d'interruption est supprimé au prochain démarrage.
 3. **Vérification :** `integrity_check`, `foreign_key_check`, `user_version` attendue sur la copie (toujours) ; puis mêmes tables et **mêmes lignes** que la source (comparaison valeur par valeur) **si la source est restée au repos**.
    - **Écriture concurrente :** `PRAGMA data_version` est lu avant la copie et après ses contrôles. Si une autre connexion ou un autre processus a validé une écriture entre-temps, la source n'est plus celle de l'instantané : la comparaison ligne à ligne n'aurait pas de sens et ne rejette donc **pas** une sauvegarde valide.
-   - La copie est alors **refaite** (jusqu'à 3 essais, cible neuve à chaque fois). Au dernier essai, elle est acceptée après ses contrôles internes (un `VACUUM INTO` est un instantané cohérent par construction) et l'événement est journalisé.
+   - La copie est alors **refaite** (jusqu'à 3 essais, cible neuve à chaque fois, la copie abandonnée est supprimée). Une copie cohérente peut en effet ne pas contenir toutes les transactions présentes au moment où la migration va commencer.
+   - **Si la source change encore pendant le troisième essai, la sauvegarde échoue avec une erreur explicite et la migration n'a pas lieu** : un point de restauration non validé n'est pas accepté. Les sauvegardes existantes sont conservées, aucun `.partial` ne subsiste, la base source n'est pas modifiée par ce mécanisme. Une source qui se stabilise à la 2ᵉ ou 3ᵉ tentative fonctionne normalement.
    - Sans écriture concurrente, toute anomalie (version, contenu, intégrité) reste un refus, donc **pas de migration**.
 4. **Aucun écrasement :** nom déjà pris → suffixe `-1`, `-2`…
 5. **Échec de sauvegarde ou de vérification = pas de migration** : le démarrage s'arrête avec une erreur explicite, la base reste strictement intacte.
@@ -118,7 +119,7 @@ Module `src-tauri/src/storage/backup.rs`, appelé par `storage::open` **avant** 
 
 Le test `restauration_depuis_une_sauvegarde` exécute exactement ces étapes sur une base fictive : captures et destinations d'origine retrouvées à l'identique, tâche créée après migration absente, ancienne base conservée dans le dossier mis de côté.
 
-## 9. Tests (Rust : 115 réussis, 1 sous-processus ignoré par conception ; 69 avant 002-A)
+## 9. Tests (Rust : 117 réussis, 1 sous-processus ignoré par conception ; 69 avant 002-A)
 
 - **Conversion (tasks) :** création et conservation intégrale du texte (texte hostile, accents, 10 000 caractères), destination copiée, titre (suggestion, normalisation, 120 caractères, caractères multi-octets), refus (déjà convertie, corbeille, version périmée, introuvable) **sans aucune modification**, atomicité par panne simulée entre les deux écritures.
 - **Annulation :** capture remise à l'identique, tâche conservée, reconversion (plusieurs cycles), refus si modifiée ou avancée, cas limites, atomicité.

@@ -474,28 +474,90 @@ fn une_ecriture_concurrente_ne_fait_pas_rejeter_une_sauvegarde_valide() {
 }
 
 #[test]
-fn une_source_qui_change_a_chaque_essai_donne_quand_meme_une_sauvegarde_controlee() {
+fn une_source_qui_change_a_chaque_essai_fait_echouer_la_sauvegarde_sans_rien_perdre() {
     let (_dir, path) = data_path();
     let v1 = create_v1(&path);
-    let mut attempts = Vec::new();
 
-    let saved = backup::before_migration_with_for_tests(&v1, &path, 1, 200, &mut |attempt| {
+    // Deux sauvegardes antérieures valides : elles doivent survivre à la tentative abandonnée.
+    backup::before_migration(&v1, &path, 1, 10).unwrap();
+    backup::before_migration(&v1, &path, 1, 11).unwrap();
+    let dir = backup::backup_dir(&path);
+    let before: Vec<(String, Vec<u8>)> = backups_in(&path)
+        .into_iter()
+        .map(|name| {
+            let bytes = fs::read(dir.join(&name)).unwrap();
+            (name, bytes)
+        })
+        .collect();
+    assert_eq!(before.len(), 2);
+    let source_before = dump(&v1, V1_ITEMS);
+
+    let mut attempts = Vec::new();
+    let error = backup::before_migration_with_for_tests(&v1, &path, 1, 200, &mut |attempt| {
         attempts.push(attempt);
         write_elsewhere(&path, &format!("concurrente-{attempt}"));
     })
-    .unwrap();
+    .unwrap_err();
 
-    assert_eq!(attempts, vec![1, 2, 3], "trois essais, puis acceptation après contrôles internes");
-    let copy = Connection::open(&saved).unwrap();
-    assert_eq!(version(&copy), 1);
-    assert_eq!(dump(&copy, "PRAGMA integrity_check"), vec![vec![Value::Text("ok".into())]]);
-    assert!(dump(&copy, "PRAGMA foreign_key_check").is_empty());
-    // Les cinq captures d'origine y sont, intactes (la copie est un instantané cohérent).
-    assert_eq!(
-        dump(&copy, "SELECT count(*) FROM inbox_items WHERE id LIKE 'c_'"),
-        vec![vec![Value::Integer(5)]]
-    );
-    assert!(backups_in(&path).iter().all(|n| !n.ends_with(".partial")));
+    assert_eq!(attempts, vec![1, 2, 3], "trois tentatives exactement, puis refus");
+    assert!(error.contains("migration est refusée"), "{error}");
+    assert!(error.contains("3 tentatives"), "{error}");
+
+    // Aucune sauvegarde finalisée pour cette tentative, aucun .partial abandonné.
+    let after = backups_in(&path);
+    assert!(!after.iter().any(|n| n.ends_with(".partial")), "{after:?}");
+    assert_eq!(after, before.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>());
+    // Aucune sauvegarde antérieure perdue ni modifiée.
+    for (name, bytes) in &before {
+        assert_eq!(&fs::read(dir.join(name)).unwrap(), bytes, "{name} intacte");
+    }
+    // Source : le mécanisme de sauvegarde n'a rien changé (seules les 3 écritures simulées d'une
+    // autre connexion s'y trouvent) ; le schéma n'a pas bougé : toujours v1, aucune migration.
+    assert_eq!(version(&v1), 1);
+    assert!(!table_exists(&v1, "tasks"));
+    let v1_rows: Vec<_> = dump(&v1, V1_ITEMS).into_iter().filter(|r| r[0] != Value::Text("concurrente-1".into())
+        && r[0] != Value::Text("concurrente-2".into()) && r[0] != Value::Text("concurrente-3".into())).collect();
+    assert_eq!(v1_rows, source_before);
+}
+
+#[test]
+fn une_source_qui_se_stabilise_a_la_deuxieme_ou_troisieme_tentative_fonctionne_normalement() {
+    for unstable_attempts in [1u32, 2] {
+        let (_dir, path) = data_path();
+        let v1 = create_v1(&path);
+        let mut attempts = Vec::new();
+
+        let saved = backup::before_migration_with_for_tests(&v1, &path, 1, 400, &mut |attempt| {
+            attempts.push(attempt);
+            if attempt <= unstable_attempts {
+                write_elsewhere(&path, &format!("concurrente-{attempt}"));
+            }
+        })
+        .unwrap();
+
+        assert_eq!(attempts.len() as u32, unstable_attempts + 1, "reprise puis succès");
+        let copy = Connection::open(&saved).unwrap();
+        // Copie complète et comparée ligne à ligne à la source stabilisée.
+        assert_eq!(dump(&copy, V1_ITEMS), dump(&v1, V1_ITEMS));
+        assert_eq!(version(&copy), 1);
+        let names = backups_in(&path);
+        assert_eq!(names.len(), 1, "{names:?}");
+        assert!(!names[0].ends_with(".partial"));
+    }
+}
+
+#[test]
+fn open_ne_migre_pas_quand_la_sauvegarde_ne_peut_pas_etre_validee() {
+    // Enchaînement réel `open` : la migration n'est appelée qu'après une sauvegarde réussie.
+    // Ici la sauvegarde échoue (dossier impossible) : la base reste en v1, sans tâches.
+    let (dir, path) = data_path();
+    drop(create_v1(&path));
+    fs::write(dir.path().join(BACKUP_DIR), b"occupe").unwrap();
+    assert!(matches!(open(&path).unwrap_err(), StorageError::Backup(_)));
+    let conn = Connection::open(&path).unwrap();
+    assert_eq!(version(&conn), 1);
+    assert!(!table_exists(&conn, "tasks"));
+    assert!(!columns_of(&conn, "inbox_items").contains(&"converted_at".to_string()));
 }
 
 #[test]
