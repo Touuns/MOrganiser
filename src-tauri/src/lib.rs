@@ -59,6 +59,11 @@ pub fn run() {
             commands::list_destinations,
             commands::list_inbox_items,
             commands::create_inbox_item,
+            commands::list_trashed_items,
+            commands::get_inbox_item,
+            commands::update_inbox_item,
+            commands::trash_inbox_item,
+            commands::restore_inbox_item,
         ])
         .build(tauri::generate_context!())
         .expect("erreur au lancement de M'Organiser")

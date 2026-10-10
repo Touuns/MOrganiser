@@ -1,0 +1,154 @@
+.detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-4);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+}
+
+.detail__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.detail__title {
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+}
+
+.detail__title:focus-visible {
+  outline-offset: 4px;
+}
+
+.detail button {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.detail button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.detail .detail__primary {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+  font-weight: var(--weight-semibold);
+}
+
+.detail .detail__danger {
+  margin-left: auto;
+  color: var(--color-danger);
+}
+
+/* Fermer : ✕ en grand écran, « ← Retour » quand la fiche remplace la vue principale. */
+.detail__close-narrow {
+  display: none;
+}
+
+.detail__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.detail__field {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.detail__field label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-muted);
+}
+
+.detail__field textarea {
+  width: 100%;
+  min-height: 7rem;
+  resize: vertical;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+  line-height: var(--leading);
+}
+
+.detail__field textarea:focus-visible {
+  outline: none;
+  border-color: var(--color-focus);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-focus) 35%, transparent);
+}
+
+.detail__field textarea[readonly] {
+  background: var(--color-surface-muted);
+}
+
+.detail__field select {
+  justify-self: start;
+}
+
+.detail__dates {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-1) var(--space-3);
+  font-size: var(--text-sm);
+}
+
+.detail__dates dt {
+  color: var(--color-text-muted);
+}
+
+.detail__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.detail__hint {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+.detail__banner,
+.detail__notice {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--color-env-dev-bg);
+  color: var(--color-env-dev-text);
+  font-size: var(--text-sm);
+}
+
+.detail__error {
+  font-size: var(--text-sm);
+  color: var(--color-danger);
+}
+
+@media (max-width: 899px) {
+  .detail__close-wide {
+    display: none;
+  }
+
+  .detail__close-narrow {
+    display: inline;
+  }
+}

@@ -82,7 +82,8 @@
   color: var(--color-danger);
 }
 
-@media (max-width: 520px) {
+/* L'aide disparaît quand la colonne est étroite (fiche ouverte, petite fenêtre). */
+@container (max-width: 620px) {
   .capture__hint {
     display: none;
   }

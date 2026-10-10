@@ -1,0 +1,35 @@
+.leave {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--color-env-dev-bg);
+  color: var(--color-env-dev-text);
+  font-size: var(--text-sm);
+}
+
+.leave__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.leave button {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.leave button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.leave__error {
+  margin-top: var(--space-2);
+  color: var(--color-danger);
+}

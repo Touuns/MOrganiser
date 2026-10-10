@@ -1,6 +1,6 @@
 # M'Organiser
 
-**Statut : brique 000 validée ; brique 001-A (capture rapide + « À organiser », SQLite locale) en cours de validation.**  
+**Statut : briques 000 et 001-A validées ; 001-B (fiche, modification, corbeille, « Voir tout ») implémentée, en cours de validation.**  
 **Plateforme cible : Windows, en premier.**  
 **Pile : Tauri 2 + React + TypeScript + Rust.**  
 **Méthode : une brique fonctionnelle à la fois.**

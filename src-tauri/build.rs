@@ -7,6 +7,11 @@ const APP_COMMANDS: &[&str] = &[
     "list_destinations",
     "list_inbox_items",
     "create_inbox_item",
+    "list_trashed_items",
+    "get_inbox_item",
+    "update_inbox_item",
+    "trash_inbox_item",
+    "restore_inbox_item",
 ];
 
 fn main() {

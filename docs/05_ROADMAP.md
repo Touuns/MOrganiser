@@ -12,7 +12,7 @@
 ## Brique 001 — Capture rapide + boîte « À organiser » (découpée en sous-étapes validées une à une)
 
 - **001-A** : boîte au-dessus du champ, saisie immédiate, destination facultative (pas un tag) et filtre, SQLite locale, relecture après relance, erreurs, tests.
-- **001-B** : consulter, modifier texte/destination, suppression récupérable ou annulable, « Voir tout ».
+- **001-B** *(implémentée, en attente de validation)* : fiche, modification avec protection du brouillon et verrou optimiste, corbeille récupérable, « Voir tout » paginé.
 - **001-C** : animation ascendante, mouvement réduit.
 - **001-D** (facultatif) : suggestion de conserver temporairement la destination.
 - **001-E** : initiation minimale sur le vrai champ et la vraie boîte.

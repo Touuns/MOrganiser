@@ -1,7 +1,7 @@
 # Brique 001 — Capture rapide et boîte « À organiser »
 
 **Document de référence unique de la brique 001** (fusion, le 2026-10-10, de l'ancienne fiche et de la spécification V2 validée par le propriétaire).
-**État : 001-A en cours de développement (branche `brique-001-capture`) ; 001-B à 001-E spécifiées, non commencées.**
+**État : 001-A validée et fusionnée dans `main` (PR #2) ; 001-B implémentée sur la branche `brique-001b-gestion`, en attente de validation ; 001-C à 001-E spécifiées, non commencées.**
 **Dépendance :** brique 000 (fondations) fusionnée dans `main` (`d527798`).
 **À lire avec :** `01_CAHIER_DES_CHARGES.md`, `02_UI_UX.md`, `03_ARCHITECTURE.md`, `04_SECURITE.md`, `05_ROADMAP.md`, `06_INITIATION.md`.
 
@@ -186,7 +186,94 @@ Chaque sous-étape est validée par le propriétaire avant la suivante ; ce ne s
 ### Limites connues
 
 - L'accueil affiche les 20 plus récentes (Rust les sélectionne, l'interface les remet en ordre chronologique) ; « Voir tout » et l'historique complet viendront en 001-B.
-- **Fermeture :** fermer la fenêtre par `×` (fermeture normale, code de sortie 0, report WAL effectué). Arrêter `pnpm app:dev` par `Ctrl+C` ou en fermant le terminal interrompt le programme (`STATUS_CONTROL_C_EXIT`, `0xc000013a`) et peut faire afficher par WebView2 `Failed to unregister class Chrome_WidgetWin_0` : messages sans conséquence pour les données (le report WAL n'a simplement pas lieu ; les captures validées sont relues depuis `-wal` au lancement suivant). La ligne `ELIFECYCLE … exit code 4294967295` affichée à chaque fermeture correspond à l'arrêt du serveur Vite par Tauri, pas à une erreur de l'application.
+- **Fermeture :** fermer la fenêtre par `×` (fermeture normale, code de sortie 0, report WAL effectué). Arrêter `pnpm app:dev` par `Ctrl+C` ou en fermant le terminal interrompt le programme (`STATUS_CONTROL_C_EXIT`, `0xc000013a`) et peut faire afficher par WebView2 `Failed to unregister class Chrome_WidgetWin_0` : messages sans conséquence pour les données (le report WAL n'a simplement pas lieu ; les captures validées sont relues depuis `-wal` au lancement suivant). La ligne `ELIFECYCLE … exit code 4294967295` affichée à la fermeture est émise par le `pnpm dev` (serveur Vite) lancé par Tauri et arrêté de force à la sortie de l'application ; l'application et le CLI Tauri renvoient bien 0 (mesuré, voir le journal du 2026-10-10).
 - Si la base est verrouillée, l'envoi attend jusqu'à 5 secondes avant d'afficher l'erreur.
 - En fenêtre très étroite, la boîte devient petite (à revoir avec le mode compact de la brique 006).
 - Si la base ne peut pas être ouverte au démarrage, l'erreur n'apparaît que dans le terminal (limite héritée de la brique 000).
+
+## 12. Réalisation 001-B (implémentée le 2026-10-10, en attente de validation)
+
+### Parcours
+
+- **Consulter :** un clic ou `Entrée` sur une carte ouvre la **fiche**. Au-dessus de 900 px de largeur, elle s'affiche dans un panneau à droite ; en dessous, elle remplace temporairement la vue principale (bouton « ← Retour »). La carte ouverte est repérée (`aria-current`). `Échap` ferme la fiche et rend le focus à la carte d'origine.
+- **Modifier :** texte et destination (dont « Aucune ») sont directement éditables ; « Enregistrer » (ou `Ctrl+Entrée`) n'est actif que s'il y a une modification valide ; « Annuler les modifications » rétablit l'original. Dates de création et de dernière modification affichées (« Jamais modifiée » si le texte n'a jamais changé).
+- **Brouillon protégé :** fermer la fiche, ouvrir une autre capture ou mettre à la corbeille avec des modifications non enregistrées affiche un avertissement : *Enregistrer* / *Abandonner les modifications* / *Continuer à modifier*. Un échec d'enregistrement (base verrouillée, etc.) conserve texte et destination et permet de réessayer.
+- **Conflit de version :** si la capture a changé depuis son ouverture, rien n'est écrasé ; le brouillon est conservé, la version actuelle devient la référence, et un nouvel « Enregistrer » est un choix explicite de la remplacer.
+- **Corbeille :** « Mettre à la corbeille » (sans confirmation lourde) ferme la fiche et affiche une notification **« Annuler »** pendant 8 secondes. La vue **Corbeille** (lien dans la boîte) liste les captures supprimées, de la plus ancienne à la plus récente suppression, avec « Restaurer » ; une capture supprimée s'ouvre en lecture seule. Aucune suppression définitive ni vidage automatique en 001-B.
+- **Voir tout :** lien affiché lorsque la boîte contient plus de captures que l'accueil n'en montre. Historique complet par lots de 50, en ordre chronologique ; « Charger les N plus anciennes » ajoute les éléments **au-dessus** sans déplacer la lecture. Le filtre de destination est conservé ; en changer repart de zéro.
+
+### Commandes et données
+
+| Commande | Rôle |
+|---|---|
+| `get_inbox_item(id)` | Lecture d'une capture (corbeille comprise) |
+| `update_inbox_item(id, content, destinationId, expectedUpdatedAt)` | Modification avec verrou optimiste |
+| `trash_inbox_item(id)` / `restore_inbox_item(id)` | Corbeille logique (`deleted_at`) et restauration |
+| `list_inbox_items(filter, limit, before)` | Étendue : pagination par curseur |
+| `list_trashed_items(limit, before)` | Corbeille |
+
+- **Aucune migration** : `deleted_at` et `updated_at` existaient déjà (schéma v1).
+- **Verrouillage optimiste, atomique :** `UPDATE … WHERE id = ? AND updated_at = ? AND deleted_at IS NULL`. Chaque modification effective fait croître **strictement** `updated_at` (`max(maintenant, attendu + 1)`), même si l'horloge n'avance pas ; sans changement réel, rien n'est écrit. Erreurs distinguées : `not_found`, `trashed`, `version_conflict`, `not_trashed`.
+- **`updated_at` ne bouge ni à la mise à la corbeille ni à la restauration** : il désigne la dernière modification du contenu. La restauration remet donc exactement la capture d'origine (identifiant, texte, destination, dates). *Conséquence à garder en tête pour la synchronisation mobile : un changement d'état (corbeille/restauration) ne se détecte que par `deleted_at` ; une future synchronisation devra prévoir un marqueur de version d'état.*
+- **Pagination par curseur `(date, id)`** (`created_at` pour la boîte, `deleted_at` pour la corbeille) : insensible aux captures ajoutées pendant le parcours. L'accueil conserve « les 20 plus récentes en ordre chronologique ».
+
+### Fichiers
+
+| Fichier | Rôle |
+|---|---|
+| `src-tauri/src/inbox.rs` | `get_item`, `update_item`, `trash_item`, `restore_item`, `list_items` (curseur, portée boîte/corbeille), nouvelles erreurs |
+| `src-tauri/src/commands.rs`, `lib.rs`, `build.rs`, `capabilities/default.json`, `config_tests.rs` | 5 nouvelles commandes déclarées, enregistrées et autorisées nommément |
+| `src/features/inbox/CaptureDetail.tsx` | Fiche : édition, brouillon, conflit, corbeille, restauration |
+| `src/features/inbox/CaptureCard.tsx` | Carte cliquable partagée (boîte, Voir tout, Corbeille) |
+| `src/features/inbox/PagedCaptureView.tsx` | Vue « Voir tout » et Corbeille : lots, défilement conservé |
+| `src/features/inbox/UndoToast.tsx` | Notification d'annulation (8 s) |
+| `src/features/inbox/InboxHome.tsx` | Orchestration : vues, fiche, garde de brouillon |
+| `src/features/inbox/InboxPanel.tsx`, `api.ts`, `format.ts`, styles | Adaptations |
+| `src/test/fakeBackend.ts` | Faux « Rust + SQLite » pour les tests de l'interface |
+
+### Tests
+
+- Rust : 69 (+1 sous-processus ignoré) ; **22 nouveaux** : modification et dates, horloge figée, deux modifications à la même milliseconde, garde atomique du `UPDATE`, introuvable/corbeille/conflit, texte vide ou trop long, destination archivée inchangée, corbeille et restauration à l'identique, tri de la corbeille, pagination sans doublon à dates égales, ajouts pendant la pagination, filtres, persistance après réouverture, échecs d'écriture, format JSON.
+- Interface : 89 (dont 64 nouveaux : fiche, édition, annulation, avertissements, échec, conflit, corbeille, restauration, notification, lots de 50, défilement, filtres, ajouts pendant la consultation).
+
+### Limites connues
+
+- Après une modification, « Voir tout » repart de la page la plus récente (les lots plus anciens déjà chargés sont rechargés à la demande).
+- Aucune suppression définitive ; la corbeille grossit tant qu'elle n'est pas gérée (à décider plus tard).
+- Seuil du panneau latéral : 900 px (à ajuster après essais d'usage).
+
+### Fermeture de la fenêtre protégée (ajout du 2026-10-10)
+
+La fermeture **normale** (bouton `×`, `Alt+F4`, fermeture depuis la barre des tâches) est interceptée par l'événement officiel Tauri 2 `onCloseRequested` (`src/lib/closeGuard.ts`) :
+
+| Situation | Comportement |
+|---|---|
+| Rien à perdre (y compris une fiche ouverte mais non modifiée) | Fermeture normale, sans confirmation |
+| Fiche modifiée | Avertissement dans la fiche : *Enregistrer* / *Abandonner les modifications* / *Continuer à modifier* (même composant que pour les autres départs de fiche) |
+| Texte non envoyé dans la capture rapide | Avertissement au-dessus des colonnes : *Envoyer* / *Abandonner ce texte* / *Continuer à écrire* |
+| Les deux | La fiche d'abord, puis la capture rapide ; « Continuer » à n'importe quelle étape annule la fermeture |
+| Échec d'enregistrement ou d'envoi | Brouillon et fenêtre conservés, message d'erreur, nouvel essai possible |
+| « Abandonner » / enregistrement réussi | Fermeture effective par `destroy()` : aucune nouvelle demande de fermeture, donc aucune boucle de confirmation |
+
+- Le focus est donné au choix le plus sûr (« Continuer ») et revient au texte quand il est choisi ; tout est utilisable au clavier.
+- **Permissions ajoutées (minimales) :** `core:event:allow-listen`, `core:event:allow-unlisten`, `core:window:allow-destroy`. Rien d'autre (pas de `core:default`, pas de `window:allow-close`).
+- **Fermeture pendant un enregistrement en cours :** la fenêtre n'est jamais détruite avant la décision. Une fiche en cours d'enregistrement est encore « non enregistrée » : l'avertissement s'affiche, puis la fermeture a lieu automatiquement, une seule fois, quand l'enregistrement réussit ; s'il échoue, fenêtre et brouillon sont conservés. Dans la capture rapide, « Envoyer » attend l'envoi en cours (pas de doublon, pas de faux échec). SQLite étant transactionnel, une écriture est soit complète, soit absente.
+- **Limite :** la protection ne concerne que la fermeture normale. Un arrêt forcé du processus (Gestionnaire des tâches, `Ctrl+C` dans le terminal de développement), l'extinction de Windows ou une coupure de courant ne sont pas interceptables ; les captures **déjà enregistrées** restent protégées par SQLite (WAL, `synchronous = FULL`), seul un brouillon non enregistré peut être perdu.
+- **Notification d'annulation :** elle recouvre désormais la ligne d'état, dans un emplacement réservé : le champ de capture ne bouge plus (mesuré : 0 px de décalage).
+
+### Coordination des opérations asynchrones (correction après audit Codex, 2026-10-10)
+
+Principe : trois notions distinctes dans la fiche : la **référence enregistrée** (`baseline`), le **brouillon** (texte et destination) et les **opérations en cours**. Un modèle « immédiat » (références mises à jour au même instant que l'état React) permet à une réponse tardive ou à une demande de fermeture de lire l'état réel, jamais celui d'un rendu périmé.
+
+| # | Défaut | Règle appliquée |
+|---|---|---|
+| A | La réponse tardive d'un enregistrement remplaçait la saisie suivante | La référence passe à la version enregistrée ; le brouillon n'est remplacé que s'il n'a pas changé depuis l'envoi. Le départ en attente n'a lieu que si plus rien n'est non enregistré. |
+| B | Une fermeture différée aboutissait malgré une nouvelle saisie ou « Continuer à écrire » | Chaque demande de fermeture est un objet annulable ; chaque décision relance l'examen de l'état ACTUEL (fiche, capture rapide, écritures en cours) avant toute destruction ; une nouvelle demande annule la précédente ; un abandon est mémorisé **par contenu** (empreinte du brouillon) : une saisie différente faite ensuite, même pendant l'attente d'une écriture, est proposée à son tour, alors qu'un brouillon inchangé et déjà abandonné n'est pas redemandé ; l'avertissement périmé reprend la fermeture dès que l'envoi a abouti. |
+| C | La corbeille de A fermait la fiche B | Le résultat porte l'identifiant de A : il ne ferme que la fiche de A, si elle est encore ouverte et sans saisie récente ; sinon notification seule. Une saisie faite pendant l'attente est conservée. |
+| D | Un brouillon n'était plus protégé quand la capture était supprimée ailleurs | `hasUnsaved()` = divergence du brouillon, indépendamment du droit d'enregistrer. « Enregistrer » explique qu'il faut d'abord restaurer ; « Annuler les modifications » est proposé aussi dans la fiche d'une capture supprimée. |
+| E | « Enregistrer puis corbeille » ne mettait pas à la corbeille | L'action enchaînée est lancée après la libération effective du verrou, et seulement si l'enregistrement a réussi. |
+| F | La fiche restait « supprimée » après une restauration depuis la liste | La fiche ouverte de la capture est relue (`refresh()`) ; son brouillon n'est pas touché. |
+
+**Fermeture pendant une corbeille, une restauration ou un envoi :** toutes les écritures sont suivies (`track`). La fermeture normale les attend (aucune demande en transit n'est interrompue), puis réexamine l'état avant de détruire la fenêtre. Pas de gestionnaire global : un simple ensemble de promesses.
+
+**Limites :** un arrêt forcé du processus, l'extinction de Windows ou une coupure de courant restent hors de portée (voir ci-dessus). Quand une fermeture normale attend une écriture bloquée, la fenêtre reste ouverte au plus le délai d'attente SQLite (5 s) puis le résultat est traité comme n'importe quelle réponse.

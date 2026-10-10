@@ -1,21 +1,47 @@
-import { useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useId, useImperativeHandle, useRef, useState, type FormEvent, type KeyboardEvent, type Ref } from "react";
 import type { Destination } from "./api";
 import { DestinationOptions } from "./DestinationOptions";
 import "./CaptureForm.css";
 
+export interface CaptureFormHandle {
+  /** Du texte saisi n'a pas encore été envoyé. */
+  hasUnsent: () => boolean;
+  /** Empreinte du texte et de la destination actuels : sert à reconnaître un abandon. */
+  draftKey: () => string;
+  /** Replace le curseur dans le champ. */
+  focus: () => void;
+  /** Envoie la saisie ; `true` si elle est enregistrée (ou s'il n'y avait rien à envoyer). */
+  submit: () => Promise<boolean>;
+}
+
 interface CaptureFormProps {
+  ref?: Ref<CaptureFormHandle>;
   destinations: Destination[];
   /** Enregistre la capture ; rejette en cas d'échec (le texte est alors conservé). */
   onSubmit: (content: string, destinationId: string | null) => Promise<void>;
+  /** Appelé après un envoi réussi, une fois le champ vidé (s'il n'a pas été modifié entre-temps). */
+  onSent?: () => void;
 }
 
 /**
  * Capture rapide : Entrée envoie, Maj+Entrée va à la ligne.
  * Le champ n'est vidé qu'après un enregistrement confirmé.
  */
-export function CaptureForm({ destinations, onSubmit }: CaptureFormProps) {
-  const [text, setText] = useState("");
-  const [destinationId, setDestinationId] = useState("");
+export function CaptureForm(props: CaptureFormProps) {
+  const { destinations, onSubmit } = props;
+  const [text, setTextState] = useState("");
+  const [destinationId, setDestinationState] = useState("");
+  // Valeurs immédiates : lisibles par une demande de fermeture ou une réponse tardive avant le
+  // prochain rendu (sinon un texte déjà envoyé paraîtrait encore « non envoyé »).
+  const draft = useRef({ text: "", destinationId: "" });
+  function setText(next: string) {
+    draft.current.text = next;
+    setTextState(next);
+  }
+  function setDestinationId(next: string) {
+    draft.current.destinationId = next;
+    setDestinationState(next);
+  }
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Verrou synchrone : bloque un second envoi avant même le prochain rendu.
@@ -25,11 +51,24 @@ export function CaptureForm({ destinations, onSubmit }: CaptureFormProps) {
   const destinationFieldId = useId();
   const errorId = useId();
 
-  async function submit() {
-    if (inFlight.current) return;
-    const sentText = text;
-    const sentDestination = destinationId;
-    if (sentText.trim() === "") return;
+  // Un envoi en cours : toute nouvelle demande (ex. « Envoyer » à la fermeture) l'attend
+  // au lieu d'échouer ou de créer un doublon.
+  const running = useRef<Promise<boolean> | null>(null);
+
+  function submit(): Promise<boolean> {
+    if (running.current) return running.current;
+    const attempt = send().finally(() => {
+      running.current = null;
+    });
+    running.current = attempt;
+    return attempt;
+  }
+
+  async function send(): Promise<boolean> {
+    if (inFlight.current) return false;
+    const sentText = draft.current.text;
+    const sentDestination = draft.current.destinationId;
+    if (sentText.trim() === "") return true;
 
     inFlight.current = true;
     setPending(true);
@@ -38,17 +77,27 @@ export function CaptureForm({ destinations, onSubmit }: CaptureFormProps) {
       await onSubmit(sentText, sentDestination === "" ? null : sentDestination);
       // Ne vider que si rien n'a été modifié pendant l'envoi : une saisie faite
       // entre-temps n'est jamais perdue.
-      setText((current) => (current === sentText ? "" : current));
-      setDestinationId((current) => (current === sentDestination ? "" : current));
+      if (draft.current.text === sentText) setText("");
+      if (draft.current.destinationId === sentDestination) setDestinationId("");
       textareaRef.current?.focus();
+      props.onSent?.();
+      return true;
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "L'enregistrement a échoué.";
       setError(`${message} Votre texte est conservé : réessayez avec Entrée ou « Envoyer ».`);
+      return false;
     } finally {
       inFlight.current = false;
       setPending(false);
     }
   }
+
+  useImperativeHandle(props.ref, () => ({
+    hasUnsent: () => draft.current.text.trim() !== "",
+    draftKey: () => `${draft.current.text}\u0000${draft.current.destinationId}`,
+    focus: () => textareaRef.current?.focus(),
+    submit,
+  }));
 
   function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     // Pendant la composition d'un caractère (accents via IME), Entrée ne valide pas.

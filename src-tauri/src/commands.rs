@@ -9,7 +9,7 @@ use serde::Serialize;
 use tauri::State;
 
 use crate::environment::Channel;
-use crate::inbox::{self, Destination, InboxError, InboxFilter, InboxItem, InboxPage};
+use crate::inbox::{self, Cursor, Destination, InboxError, InboxFilter, InboxItem, InboxPage, Scope};
 use crate::{AppEnvironment, Database};
 
 /// Informations de diagnostic affichées dans la fenêtre. Lecture seule.
@@ -64,8 +64,57 @@ pub async fn list_inbox_items(
     db: State<'_, Database>,
     filter: InboxFilter,
     limit: u32,
+    before: Option<Cursor>,
 ) -> Result<InboxPage, InboxError> {
-    with_db(&db, |conn| inbox::list_items(conn, &filter, limit))
+    with_db(&db, |conn| {
+        inbox::list_items(conn, &filter, Scope::Active, before.as_ref(), limit)
+    })
+}
+
+#[tauri::command]
+pub async fn list_trashed_items(
+    db: State<'_, Database>,
+    limit: u32,
+    before: Option<Cursor>,
+) -> Result<InboxPage, InboxError> {
+    with_db(&db, |conn| {
+        inbox::list_items(conn, &InboxFilter::All, Scope::Trash, before.as_ref(), limit)
+    })
+}
+
+#[tauri::command]
+pub async fn get_inbox_item(db: State<'_, Database>, id: String) -> Result<InboxItem, InboxError> {
+    with_db(&db, |conn| inbox::get_item(conn, &id))
+}
+
+#[tauri::command]
+pub async fn update_inbox_item(
+    db: State<'_, Database>,
+    id: String,
+    content: String,
+    destination_id: Option<String>,
+    expected_updated_at: i64,
+) -> Result<InboxItem, InboxError> {
+    with_db(&db, |conn| {
+        inbox::update_item(
+            conn,
+            &id,
+            &content,
+            destination_id.as_deref(),
+            expected_updated_at,
+            now_ms(),
+        )
+    })
+}
+
+#[tauri::command]
+pub async fn trash_inbox_item(db: State<'_, Database>, id: String) -> Result<InboxItem, InboxError> {
+    with_db(&db, |conn| inbox::trash_item(conn, &id, now_ms()))
+}
+
+#[tauri::command]
+pub async fn restore_inbox_item(db: State<'_, Database>, id: String) -> Result<InboxItem, InboxError> {
+    with_db(&db, |conn| inbox::restore_item(conn, &id))
 }
 
 #[tauri::command]

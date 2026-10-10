@@ -120,6 +120,97 @@
 - **Fichiers modifiés :** `src-tauri/src/storage/mod.rs`, fiche brique 001, `03_ARCHITECTURE.md`.
 - **Tests exécutés / résultats réels :** nouveau test `une_base_future_en_journal_classique_reste_strictement_intacte` (fichier identique octet pour octet, pas de `-wal` créé, mode `delete` conservé, `user_version` = 99) ; `pnpm typecheck` OK ; `pnpm test` : 25/25 interface, 47/47 Rust (+1 ignoré) ; le test des réglages WAL/FULL des bases compatibles reste vert.
 
+## 2026-10-10 — Brique 001-B : gestion des captures
+
+- **Objectif :** fiche de consultation, modification, corbeille récupérable, « Voir tout » paginé (périmètre validé par le propriétaire).
+- **Décisions prises :** voir `09_DECISIONS_OUVERTES.md` (panneau 900 px, corbeille sans confirmation + annulation 8 s, verrou optimiste atomique, lots de 50).
+- **Fichiers :** voir fiche brique 001, section 12.
+- **Fonctionnement expliqué simplement :** cliquer une carte ouvre sa fiche ; l'enregistrement n'a lieu que si la capture n'a pas changé entre-temps ; supprimer ne fait que la masquer (champ `deleted_at`) et la corbeille permet de la remettre exactement comme avant ; « Voir tout » charge l'historique 50 par 50 en s'appuyant sur la date et l'identifiant du dernier élément reçu.
+- **Tests exécutés / résultats réels :**
+  - `pnpm typecheck` OK ; `pnpm test` : 55/55 interface, 69/69 Rust (+1 ignoré) ; `pnpm audit` : aucune vulnérabilité.
+  - Fenêtre Dev réelle (pilotée par le protocole DevTools local, 127.0.0.1) :
+    - fiche : ouverture au clic et par `Entrée` (focus dans le texte), fermeture par `Échap` (focus rendu à la carte) ;
+    - modification texte + destination, date « Dernière modification » mise à jour ; avertissement de brouillon et « Continuer à modifier » ;
+    - corbeille depuis la fiche, notification « Annuler », restauration à sa place chronologique ; vue Corbeille ; fiche en lecture seule ;
+    - **échec réel** (base verrouillée par un script) : brouillon conservé, nouvel essai réussi ; **conflit réel** (écriture externe en base) : version externe non écrasée, brouillon conservé, remplacement seulement au second enregistrement (base vérifiée à chaque étape) ;
+    - « Voir tout » avec 82 captures : lot de 50, lot plus ancien de 32 ajouté au-dessus, **position de lecture conservée à l'identique** (la carte lue n'a pas bougé), 0 doublon ; filtres Finances (22), À classer (55), Toutes (82) **égaux aux comptes de la base** ;
+    - fermeture normale (code 0, `-wal` vidé) puis relance : modification et corbeille conservées ; restauration : mêmes identifiant, date de création et `updated_at` qu'avant la suppression ;
+    - fenêtre étroite (600 px émulés) : la fiche remplace la vue principale, « ← Retour » affiché.
+  - Dossier Stable : absent avant et après.
+- **Problèmes rencontrés :**
+  - premier rendu avec fiche ouverte : l'aide « Entrée pour envoyer… » se repliait lettre par lettre dans la colonne rétrécie → masquée par une requête de conteneur (corrigé, vérifié) ;
+  - `git merge --ff-only` lancé par erreur depuis `brique-001-capture` (qui a avancé localement) → branche remise à `a0f6a42` (identique à GitHub), `main` synchronisée, aucune perte ;
+  - mes scripts de pilotage ont eu deux défauts de sélecteur (ancien texte filtré, première carte « Restaurer » cliquée) ; l'application n'était pas en cause, les contrôles ont été refaits.
+- **Diagnostic Codex :** non demandé à ce stade.
+- **Problèmes connus / limites :** voir fiche brique 001, section 12 (fermeture de fenêtre avec brouillon, « Voir tout » rechargé après modification, pas de suppression définitive, seuil 900 px à ajuster).
+- **Validation du propriétaire :** en attente.
+- **Prochaine étape :** 001-C (animation ascendante), après validation.
+
+## 2026-10-10 — Brique 001-B : protection de la fermeture de la fenêtre
+
+- **Demande du propriétaire :** ne plus perdre un brouillon (fiche ou capture rapide) à la fermeture normale ; examiner le message ELIFECYCLE ; stabiliser l'emplacement de la notification d'annulation.
+- **Mise en œuvre :** `useCloseGuard` (`src/lib/closeGuard.ts`) sur `onCloseRequested` ; composant partagé `LeaveBanner` (fiche et capture rapide) ; `hasUnsaved()` (fiche) et `hasUnsent()`/`submit()` (capture rapide) ; fermeture par `destroy()` après décision (aucune boucle). Permissions ajoutées : `core:event:allow-listen`, `core:event:allow-unlisten`, `core:window:allow-destroy` (vérifiées dans le code source de Tauri 2.12.1 : le gestionnaire est attendu, la fenêtre est détruite automatiquement s'il n'appelle pas `preventDefault()`).
+- **Corrigé en cours de route :** après « Continuer », le focus tombait sur la page ; il revient au texte (fiche) ou au champ (capture rapide), testé.
+- **Tests :** `pnpm typecheck` OK ; `pnpm test` : 68/68 interface (13 nouveaux dans `InboxHome.close.test.tsx`), 69/69 Rust (+1 ignoré) ; `pnpm audit` : aucune vulnérabilité.
+- **Vérifié dans la fenêtre Dev réelle (fermeture par WM_CLOSE, équivalent du `×`) :**
+
+  | Scénario | Résultat |
+  |---|---|
+  | Sans brouillon | Fermée en 0,2 s, code de sortie 0, `-wal` vide |
+  | Fiche modifiée → Continuer | Fenêtre ouverte, brouillon intact, focus dans le texte, base inchangée |
+  | Fiche modifiée → Abandonner | Application arrêtée, base inchangée, brouillon non écrit |
+  | Fiche modifiée → Enregistrer | Enregistré, fenêtre fermée en 0,3 s |
+  | Fiche modifiée, base verrouillée → Enregistrer | Erreur affichée, fenêtre et brouillon conservés, base inchangée ; réussi une fois le verrou levé |
+  | Texte non envoyé → Continuer | Fenêtre ouverte, texte conservé, focus dans le champ |
+  | Texte non envoyé → Envoyer | Capture enregistrée puis fermeture |
+  | Relance | Toutes les captures retrouvées |
+  | Dossier Stable | Absent |
+
+- **Notification d'annulation :** emplacement réservé sous le champ ; position du champ mesurée avant, pendant et après la notification : 379 px, 379 px, 379 px.
+- **Diagnostic ELIFECYCLE (`Command failed with exit code 4294967295`) :** *pas un défaut de l'application.*
+  - code de sortie de `morganiser.exe` : **0** (toutes les fermetures) ;
+  - code de sortie du CLI Tauri lancé par `node tauri.js dev` (sans pnpm autour) : **0**, et le message est quand même présent dans son journal : il ne vient donc pas du pnpm externe ;
+  - code de sortie de `pnpm app:dev`, `pnpm exec tauri dev` et `node tauri.js dev` (trois chaînes, mesurées séquentiellement) : **0** ;
+  - le message est écrit par le `pnpm dev` interne (`beforeDevCommand`, qui exécute Vite) : à la sortie de l'application, le CLI Tauri arrête ce processus de force, qui se termine avec -1 (`0xFFFFFFFF` = 4294967295) et le signale ;
+  - après la fermeture : aucun processus `morganiser`, port 1420 libre, SQLite fermé (`-wal` = 0), captures retrouvées à la relance.
+  - Aucun contournement ajouté. Le message n'existe qu'en mode développement (`pnpm app:dev`).
+- **Erreurs de mesure corrigées pendant le diagnostic :** journaux PowerShell lus en UTF-8 alors qu'ils sont en UTF-16 (faux « ELIFECYCLE absent ») ; `bash` résolu vers WSL dans un script (essais chevauchés, mesures écartées puis refaites séquentiellement) ; un scénario (D) rejoué car sa carte avait été renommée plus tôt.
+- **Problèmes connus / limites :** arrêt forcé du processus, extinction de Windows et coupure de courant ne sont pas interceptables (documenté) ; seul un brouillon non enregistré peut alors être perdu.
+- **Validation du propriétaire :** en attente.
+
+## 2026-10-10 — Brique 001-B : fermeture pendant un enregistrement (clôture)
+
+- **Constat :** aucune perte possible (fenêtre non détruite avant décision, écriture SQLite atomique), mais deux comportements faux : avertissement périmé dans la fiche après la fin de l'enregistrement, et faux message « L'envoi a échoué » dans la capture rapide si l'envoi était en cours.
+- **Correction :** la fiche exécute le départ en attente une seule fois dès que l'enregistrement réussit ; la capture rapide fait attendre toute nouvelle demande d'envoi sur l'envoi en cours.
+- **Tests :** 3 nouveaux (enregistrement long puis fermeture ; enregistrement qui échoue ; envoi long puis « Envoyer »). `pnpm typecheck` OK ; `pnpm test:ui` 71/71 ; Rust inchangé (69/69 au dernier passage complet).
+- **Limite :** une mise à la corbeille ou une restauration en cours n'est pas bloquante pour la fermeture (opération atomique côté Rust, sans brouillon à perdre).
+
+## 2026-10-10 — Brique 001-B : corrections après audit Codex de `d7edd22`
+
+- **Contexte :** audit en lecture seule, 6 défauts avérés (4 élevés) de coordination asynchrone ; publication suspendue. Aucun commit correctif avant validation.
+- **Méthode :** 15 tests déterministes à promesses différées écrits **avant** les corrections (`InboxHome.async.test.tsx`) : 11 échouaient sur `d7edd22`, 4 étaient des garde-fous.
+- **Défauts, causes et corrections :** voir la fiche brique 001, section « Coordination des opérations asynchrones ». Cause commune : décisions prises sur l'état d'un rendu périmé (closure) et résultats d'opérations non rattachés à leur capture d'origine.
+- **Deux défauts supplémentaires trouvés pendant la correction :** (1) juste après un enregistrement réussi, `hasUnsaved()` lisait encore l'ancien rendu et ré-affichait l'avertissement ; même défaut côté capture rapide (`hasUnsent()`) → modèle immédiat par références ; (2) un avertissement « texte non envoyé » devenait périmé si l'envoi aboutissait pendant son affichage → la fermeture reprend (`onSent`).
+- **Tests :** `pnpm typecheck` OK ; interface 86/86 (+15) ; Rust 69/69 (+1 ignoré, inchangé) ; `pnpm audit` : aucune vulnérabilité.
+- **Fenêtre Dev réelle, retards créés par un verrou SQLite (3,5 s) :** 24 vérifications sur 24 :
+  - A : saisie B conservée, A en base, B s'enregistre ensuite sans conflit ;
+  - B : × pendant l'envoi → avertissement, « Envoyer » puis « Continuer à écrire » → fenêtre ouverte, capture enregistrée une seule fois ;
+  - C : corbeille de A différée pendant l'ouverture de B → fiche et brouillon de B intacts, notification affichée, brouillon protégé à la fermeture ;
+  - D : capture supprimée ailleurs → brouillon conservé, fermeture suspendue, restauration en gardant le brouillon ;
+  - E : enregistrer puis corbeille → texte enregistré et capture à la corbeille ;
+  - F : restauration depuis la liste → fiche modifiable, titre et commandes cohérents ;
+  - G : × pendant une corbeille bloquée → la fenêtre attend, puis se ferme (2,6 s), mise à la corbeille aboutie.
+- **SQLite :** `integrity_check` ok, aucune violation de clé étrangère, schéma v1, aucun doublon ; `-wal` vide après fermeture. Dossier Stable : absent.
+- **Fichiers modifiés :** `CaptureDetail.tsx`, `CaptureForm.tsx`, `InboxHome.tsx`, nouveau `InboxHome.async.test.tsx`, fiche brique 001, journal.
+- **Limites :** voir la fiche (arrêt forcé, coupure de courant). **Validation du propriétaire :** en attente ; commit correctif non créé.
+
+## 2026-10-10 — Brique 001-B : abandon limité au brouillon concerné (revue GitHub de `b1f3cc2`)
+
+- **Défaut :** `skipDetail`/`skipForm` restaient vrais jusqu'à la destruction de la fenêtre : un texte B saisi pendant l'attente d'une écriture, après l'abandon de A, était considéré abandonné et détruit à la fermeture.
+- **Reproduction :** 2 tests déterministes (fiche, capture rapide) échouaient avant correction ; un troisième (brouillon inchangé abandonné → fermeture sans nouvel avertissement) servait de garde-fou.
+- **Correction :** l'abandon mémorise l'empreinte du brouillon (`draftKey()`), pas un drapeau ; la fermeture réexamine l'état actuel à la reprise.
+- **Tests :** `pnpm typecheck` OK ; interface 89/89 ; Rust non modifié (69/69 au dernier passage).
+
 ## Modèle à recopier après chaque brique
 
 ### AAAA-MM-JJ — Brique XXX : [nom]
