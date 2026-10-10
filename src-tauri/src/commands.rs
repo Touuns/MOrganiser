@@ -10,6 +10,7 @@ use tauri::State;
 
 use crate::environment::Channel;
 use crate::inbox::{self, Cursor, Destination, InboxError, InboxFilter, InboxItem, InboxPage, Scope};
+use crate::tasks::{self, Conversion, Task, TaskError, TaskPage};
 use crate::{AppEnvironment, Database};
 
 /// Informations de diagnostic affichées dans la fenêtre. Lecture seule.
@@ -30,14 +31,44 @@ pub fn app_info(app: tauri::AppHandle, env: State<'_, AppEnvironment>) -> AppInf
     }
 }
 
+/// Erreurs de domaine que `with_db` sait produire ou journaliser.
+trait DomainError {
+    fn unavailable() -> Self;
+    fn storage_cause(&self) -> Option<&rusqlite::Error>;
+}
+
+impl DomainError for InboxError {
+    fn unavailable() -> Self {
+        InboxError::Unavailable
+    }
+    fn storage_cause(&self) -> Option<&rusqlite::Error> {
+        match self {
+            InboxError::Storage(cause) => Some(cause),
+            _ => None,
+        }
+    }
+}
+
+impl DomainError for TaskError {
+    fn unavailable() -> Self {
+        TaskError::Unavailable
+    }
+    fn storage_cause(&self) -> Option<&rusqlite::Error> {
+        match self {
+            TaskError::Storage(cause) => Some(cause),
+            _ => None,
+        }
+    }
+}
+
 /// Exécute `action` avec la connexion, accès un par un.
-fn with_db<T>(
+fn with_db<T, E: DomainError>(
     db: &Database,
-    action: impl FnOnce(&rusqlite::Connection) -> Result<T, InboxError>,
-) -> Result<T, InboxError> {
-    let conn = db.0.lock().map_err(|_| InboxError::Unavailable)?;
+    action: impl FnOnce(&rusqlite::Connection) -> Result<T, E>,
+) -> Result<T, E> {
+    let conn = db.0.lock().map_err(|_| E::unavailable())?;
     let result = action(&conn);
-    if let Err(InboxError::Storage(cause)) = &result {
+    if let Some(cause) = result.as_ref().err().and_then(DomainError::storage_cause) {
         // Cause technique pour le diagnostic (terminal de développement uniquement).
         // Requêtes paramétrées : elle ne contient jamais le texte saisi.
         eprintln!("[M'Organiser] erreur SQLite : {cause}");
@@ -125,5 +156,58 @@ pub async fn create_inbox_item(
 ) -> Result<InboxItem, InboxError> {
     with_db(&db, |conn| {
         inbox::create_item(conn, &content, destination_id.as_deref(), now_ms())
+    })
+}
+
+// --- Conversion des captures en tâches (002-A) ---
+
+/// Transforme une capture en tâche. `title` : `None` utilise le titre proposé.
+#[tauri::command]
+pub async fn convert_inbox_item_to_task(
+    db: State<'_, Database>,
+    id: String,
+    expected_updated_at: i64,
+    title: Option<String>,
+) -> Result<Conversion, TaskError> {
+    with_db(&db, |conn| {
+        tasks::convert_item(conn, &id, expected_updated_at, title.as_deref(), now_ms())
+    })
+}
+
+/// Annule la conversion : la capture revient dans la boîte, la tâche est conservée.
+#[tauri::command]
+pub async fn cancel_task_conversion(db: State<'_, Database>, id: String) -> Result<Conversion, TaskError> {
+    with_db(&db, |conn| tasks::cancel_conversion(conn, &id, now_ms()))
+}
+
+/// Titre proposé pour la conversion d'une capture (lecture seule).
+#[tauri::command]
+pub async fn suggest_task_title(db: State<'_, Database>, id: String) -> Result<String, TaskError> {
+    with_db(&db, |conn| tasks::suggest_title_for_item(conn, &id))
+}
+
+#[tauri::command]
+pub async fn list_tasks(
+    db: State<'_, Database>,
+    limit: u32,
+    before: Option<Cursor>,
+) -> Result<TaskPage, TaskError> {
+    with_db(&db, |conn| tasks::list_tasks(conn, before.as_ref(), limit))
+}
+
+#[tauri::command]
+pub async fn get_task(db: State<'_, Database>, id: String) -> Result<Task, TaskError> {
+    with_db(&db, |conn| tasks::get_task(conn, &id))
+}
+
+/// Captures transformées en tâche (« Traitées »), de la plus récemment traitée à la plus ancienne.
+#[tauri::command]
+pub async fn list_converted_items(
+    db: State<'_, Database>,
+    limit: u32,
+    before: Option<Cursor>,
+) -> Result<InboxPage, InboxError> {
+    with_db(&db, |conn| {
+        inbox::list_items(conn, &InboxFilter::All, Scope::Converted, before.as_ref(), limit)
     })
 }

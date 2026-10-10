@@ -11,6 +11,7 @@ mod config_tests;
 mod environment;
 mod inbox;
 mod storage;
+mod tasks;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -64,6 +65,12 @@ pub fn run() {
             commands::update_inbox_item,
             commands::trash_inbox_item,
             commands::restore_inbox_item,
+            commands::convert_inbox_item_to_task,
+            commands::cancel_task_conversion,
+            commands::suggest_task_title,
+            commands::list_tasks,
+            commands::get_task,
+            commands::list_converted_items,
         ])
         .build(tauri::generate_context!())
         .expect("erreur au lancement de M'Organiser")

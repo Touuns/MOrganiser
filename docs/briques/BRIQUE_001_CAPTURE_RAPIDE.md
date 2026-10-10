@@ -1,7 +1,7 @@
 # Brique 001 — Capture rapide et boîte « À organiser »
 
 **Document de référence unique de la brique 001** (fusion, le 2026-10-10, de l'ancienne fiche et de la spécification V2 validée par le propriétaire).
-**État : 001-A validée et fusionnée dans `main` (PR #2) ; 001-B implémentée sur la branche `brique-001b-gestion`, en attente de validation ; 001-C à 001-E spécifiées, non commencées.**
+**État : brique 001 (A à E) validée par le propriétaire et fusionnée dans `main` (PR #2 à #6). La suite (transformation d'une capture en tâche) est spécifiée dans `BRIQUE_002_VIE_ELEMENT_CAPTURE.md`.**
 **Dépendance :** brique 000 (fondations) fusionnée dans `main` (`d527798`).
 **À lire avec :** `01_CAHIER_DES_CHARGES.md`, `02_UI_UX.md`, `03_ARCHITECTURE.md`, `04_SECURITE.md`, `05_ROADMAP.md`, `06_INITIATION.md`.
 
@@ -144,7 +144,7 @@ Chaque sous-étape est validée par le propriétaire avant la suivante ; ce ne s
 - Mise à jour de cette fiche, des documents transversaux et de `07_JOURNAL_DEVELOPPEMENT.md`.
 - Travail sur une branche issue de `main` propre ; **aucun push ni fusion sans autorisation**. Claude seul modifie le code ; Codex audite en lecture seule.
 
-## 11. Réalisation 001-A (implémentée le 2026-10-10, en attente de validation)
+## 11. Réalisation 001-A (implémentée le 2026-10-10, validée et fusionnée : PR #2)
 
 ### Chemin d'une capture
 
@@ -197,7 +197,7 @@ Chaque sous-étape est validée par le propriétaire avant la suivante ; ce ne s
 - En fenêtre très étroite, la boîte devient petite (à revoir avec le mode compact de la brique 006).
 - Si la base ne peut pas être ouverte au démarrage, l'erreur n'apparaît que dans le terminal (limite héritée de la brique 000).
 
-## 12. Réalisation 001-B (implémentée le 2026-10-10, en attente de validation)
+## 12. Réalisation 001-B (implémentée le 2026-10-10, validée et fusionnée : PR #3)
 
 ### Parcours
 
@@ -205,7 +205,7 @@ Chaque sous-étape est validée par le propriétaire avant la suivante ; ce ne s
 - **Modifier :** texte et destination (dont « Aucune ») sont directement éditables ; « Enregistrer » (ou `Ctrl+Entrée`) n'est actif que s'il y a une modification valide ; « Annuler les modifications » rétablit l'original. Dates de création et de dernière modification affichées (« Jamais modifiée » si le texte n'a jamais changé).
 - **Brouillon protégé :** fermer la fiche, ouvrir une autre capture ou mettre à la corbeille avec des modifications non enregistrées affiche un avertissement : *Enregistrer* / *Abandonner les modifications* / *Continuer à modifier*. Un échec d'enregistrement (base verrouillée, etc.) conserve texte et destination et permet de réessayer.
 - **Conflit de version :** si la capture a changé depuis son ouverture, rien n'est écrasé ; le brouillon est conservé, la version actuelle devient la référence, et un nouvel « Enregistrer » est un choix explicite de la remplacer.
-- **Corbeille :** « Mettre à la corbeille » (sans confirmation lourde) ferme la fiche et affiche une notification **« Annuler »** pendant 8 secondes. La vue **Corbeille** (lien dans la boîte) liste les captures supprimées, de la plus ancienne à la plus récente suppression, avec « Restaurer » ; une capture supprimée s'ouvre en lecture seule. Aucune suppression définitive ni vidage automatique en 001-B.
+- **Corbeille :** « Mettre à la corbeille » (sans confirmation lourde) ferme la fiche et affiche une notification **« Annuler »** (8 secondes en 001-B ; **ramenée à 4 secondes en 001-C**, voir section 13). La vue **Corbeille** (lien dans la boîte) liste les captures supprimées, de la plus ancienne à la plus récente suppression, avec « Restaurer » ; une capture supprimée s'ouvre en lecture seule. Aucune suppression définitive ni vidage automatique en 001-B.
 - **Voir tout :** lien affiché lorsque la boîte contient plus de captures que l'accueil n'en montre. Historique complet par lots de 50, en ordre chronologique ; « Charger les N plus anciennes » ajoute les éléments **au-dessus** sans déplacer la lecture. Le filtre de destination est conservé ; en changer repart de zéro.
 
 ### Commandes et données
@@ -232,7 +232,7 @@ Chaque sous-étape est validée par le propriétaire avant la suivante ; ce ne s
 | `src/features/inbox/CaptureDetail.tsx` | Fiche : édition, brouillon, conflit, corbeille, restauration |
 | `src/features/inbox/CaptureCard.tsx` | Carte cliquable partagée (boîte, Voir tout, Corbeille) |
 | `src/features/inbox/PagedCaptureView.tsx` | Vue « Voir tout » et Corbeille : lots, défilement conservé |
-| `src/features/inbox/UndoToast.tsx` | Notification d'annulation (8 s) |
+| `src/features/inbox/UndoToast.tsx` | Notification d'annulation (8 s en 001-B, 4 s depuis 001-C) |
 | `src/features/inbox/InboxHome.tsx` | Orchestration : vues, fiche, garde de brouillon |
 | `src/features/inbox/InboxPanel.tsx`, `api.ts`, `format.ts`, styles | Adaptations |
 | `src/test/fakeBackend.ts` | Faux « Rust + SQLite » pour les tests de l'interface |
@@ -284,7 +284,7 @@ Principe : trois notions distinctes dans la fiche : la **référence enregistré
 
 **Limites :** un arrêt forcé du processus, l'extinction de Windows ou une coupure de courant restent hors de portée (voir ci-dessus). Quand une fermeture normale attend une écriture bloquée, la fenêtre reste ouverte au plus le délai d'attente SQLite (5 s) puis le résultat est traité comme n'importe quelle réponse.
 
-## 13. Réalisation 001-C : animation d'arrivée (implémentée le 2026-10-10, en attente de validation)
+## 13. Réalisation 001-C : animation d'arrivée (implémentée le 2026-10-10, validée et fusionnée : PR #4)
 
 ### Comportement
 
@@ -328,7 +328,7 @@ L'arrivée animée est validée par le propriétaire et reste inchangée. Consta
 
 - **Transition de sortie :** après confirmation de la base (jamais avant), la carte concernée disparaît en fondu avec un léger rétrécissement, **220 ms**, ease-in. Carte fantôme = clone non interactif (`aria-hidden`, `inert`) ; la vraie carte n'est que masquée ; les cartes restantes glissent vers leur place (FLIP déclenché quand la liste a retiré la carte, via `MutationObserver`). Code : `playDeparture` dans `arrivalAnimation.ts`, déclenchée par `InboxHome` juste après le rendu où la fiche s'est refermée (la liste est alors visible, même en fenêtre étroite).
 - **Jamais de réactivation :** la transition ne peut pas rendre la capture de nouveau active ; la suppression logique n'est pas retardée.
-- **Notification :** « Capture déplacée dans la corbeille. » + « Annuler » (≈ 8 s). Elle est désormais **flottante** (`position: fixed`, en bas, centrée, hors du flux : aucun déplacement du champ de capture), contrastée (bordure d'accent, ombre) et accueillie par une **région vivante persistante** (`aria-live="polite"`) pour que l'ajout du message soit annoncé. La minuterie ne repart plus à chaque rendu du parent.
+- **Notification :** « Capture déplacée dans la corbeille. » + « Annuler » (8 s à l'époque ; 4 s depuis l'ajustement ci-dessous). Elle est désormais **flottante** (`position: fixed`, en bas, centrée, hors du flux : aucun déplacement du champ de capture), contrastée (bordure d'accent, ombre) et accueillie par une **région vivante persistante** (`aria-live="polite"`) pour que l'ajout du message soit annoncé. La minuterie ne repart plus à chaque rendu du parent.
 - **Focus :** il passe à la carte voisine (suivante, sinon précédente), ou au champ de capture s'il n'y en a plus ; il n'est plus perdu avec la carte supprimée.
 - **Cas particuliers :**
 
@@ -402,7 +402,7 @@ La carte réelle n'est masquée que pendant le trajet et **n'est jamais laissée
 - Composant réutilisé : `UndoToast` (aucun second système). Tests : 7 sur la notification ; interface : 132.
 - **Mesures dans la fenêtre Windows réelle (validées) :** position en bas à droite (`t` 764, `b` 796) à 1700, 960 et 600 px ; boîte, champ et « Envoyer » immobiles ; aucun recouvrement du champ, de « Envoyer » ni de la boîte ; disparition ≈ 4,4 s après l'action ; pause au survol (affichée 6 s pendant que la souris est dessus, disparition ≈ 3,8 s après la sortie du curseur, soit le temps restant) ; « Annuler » restaure la capture (20 → 20 cartes) et retire la notification.
 
-## 14. Réalisation 001-E : initiation minimale (implémentée le 2026-10-10, en attente de validation)
+## 14. Réalisation 001-E : initiation minimale (implémentée le 2026-10-10, validée et fusionnée : PR #6 ; 001-D : PR #5)
 
 ### Décisions du propriétaire
 - Proposition automatique **uniquement lors d'une véritable première utilisation**, présentée **une seule fois** : mémorisée dès son premier affichage, même si l'application est fermée sans réponse.
@@ -441,3 +441,7 @@ Pas d'écran de conclusion séparé : « Terminer » clôt la visite à l'étape
 - Contour intérieur uniquement : rien ne change de taille ni de place (boîte et champ de capture mesurés identiques avant et après l'étape).
 - `prefers-reduced-motion` : durée de transition à 0 (jetons).
 - Limite préexistante : sous ≈ 480 px de haut et ≈ 360 px de large, la liste de la boîte est presque vide de hauteur (16 px mesurés sans la visite) ; la visite n'y change rien.
+
+## 15. Évolution du schéma par la brique 002 (migration 0002)
+
+La migration 0002 ajoute à `inbox_items` deux colonnes facultatives, `converted_at` et `converted_task_id` (capture « traitée » : elle quitte la boîte, sans être détruite ni modifiée). Une capture convertie est en lecture seule et ne va pas à la corbeille. Les lectures de la boîte excluent les captures converties. Détail, invariants et sauvegarde préalable : `BRIQUE_002_VIE_ELEMENT_CAPTURE.md`.

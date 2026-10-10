@@ -3,6 +3,11 @@
 //! Le numéro de version du schéma est stocké dans la base (`PRAGMA user_version`).
 //! Chaque migration s'applique dans sa propre transaction : en cas d'échec, la base
 //! reste dans la version précédente.
+//!
+//! Avant de migrer une base **existante**, une sauvegarde cohérente et vérifiée est faite
+//! (voir `backup`). Si elle échoue, la migration n'a pas lieu.
+
+mod backup;
 
 use std::fmt;
 use std::path::Path;
@@ -13,7 +18,10 @@ use rusqlite::Connection;
 pub const DB_FILE_NAME: &str = "morganiser.db";
 
 /// Migrations dans l'ordre ; la migration d'indice `i` amène le schéma en version `i + 1`.
-const MIGRATIONS: &[&str] = &[include_str!("../../migrations/0001_initial.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("../../migrations/0001_initial.sql"),
+    include_str!("../../migrations/0002_tasks.sql"),
+];
 
 /// Version du schéma que cette version de l'application sait utiliser.
 pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
@@ -23,7 +31,16 @@ pub fn open(path: &Path) -> Result<Connection, StorageError> {
     let mut conn = Connection::open(path)?;
     // D'abord une simple lecture : une base d'une version future est refusée AVANT tout
     // réglage susceptible de la modifier (le passage en WAL est écrit dans le fichier).
-    check_schema_version(&conn)?;
+    let current = check_schema_version(&conn)?;
+    // Base existante à migrer : sauvegarde cohérente et vérifiée AVANT toute modification.
+    // Un échec arrête le démarrage ; la base reste exactement dans son état d'origine.
+    if current > 0 && current < SCHEMA_VERSION {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        backup::before_migration(&conn, path, current, now_ms).map_err(StorageError::Backup)?;
+    }
     configure(&conn)?;
     migrate(&mut conn)?;
     Ok(conn)
@@ -31,12 +48,13 @@ pub fn open(path: &Path) -> Result<Connection, StorageError> {
 
 /// Lit la version du schéma (lecture seule) et refuse une version plus récente.
 fn check_schema_version(conn: &Connection) -> Result<u32, StorageError> {
+    check_schema_version_against(conn, SCHEMA_VERSION)
+}
+
+fn check_schema_version_against(conn: &Connection, supported: u32) -> Result<u32, StorageError> {
     let current: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if current > SCHEMA_VERSION {
-        return Err(StorageError::NewerSchema {
-            found: current,
-            supported: SCHEMA_VERSION,
-        });
+    if current > supported {
+        return Err(StorageError::NewerSchema { found: current, supported });
     }
     Ok(current)
 }
@@ -57,15 +75,21 @@ fn configure(conn: &Connection) -> Result<(), StorageError> {
 
 /// Applique les migrations manquantes et renvoie la version finale du schéma.
 pub fn migrate(conn: &mut Connection) -> Result<u32, StorageError> {
+    migrate_with(conn, MIGRATIONS)
+}
+
+/// Une transaction par migration : le schéma ET `user_version` changent ensemble, ou pas du
+/// tout. (Séparée de `migrate` pour pouvoir tester un échec en cours de route.)
+fn migrate_with(conn: &mut Connection, migrations: &[&str]) -> Result<u32, StorageError> {
     // Contrôle répété ici pour que `migrate` reste sûre si elle est appelée seule.
-    let current = check_schema_version(conn)?;
-    for (index, sql) in MIGRATIONS.iter().enumerate().skip(current as usize) {
+    let current = check_schema_version_against(conn, migrations.len() as u32)?;
+    for (index, sql) in migrations.iter().enumerate().skip(current as usize) {
         let tx = conn.transaction()?;
         tx.execute_batch(sql)?;
         tx.pragma_update(None, "user_version", index as u32 + 1)?;
         tx.commit()?;
     }
-    Ok(SCHEMA_VERSION)
+    Ok(migrations.len() as u32)
 }
 
 /// Résultat d'un checkpoint.
@@ -98,12 +122,18 @@ pub fn checkpoint(conn: &Connection) -> Result<Checkpoint, StorageError> {
 pub enum StorageError {
     Sqlite(rusqlite::Error),
     NewerSchema { found: u32, supported: u32 },
+    /// La sauvegarde préalable à la migration a échoué : la base n'a pas été migrée.
+    Backup(String),
 }
 
 impl fmt::Display for StorageError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             StorageError::Sqlite(error) => write!(f, "erreur de la base de données : {error}"),
+            StorageError::Backup(reason) => write!(
+                f,
+                "la sauvegarde avant migration a échoué ({reason}) ; la base n'a pas été modifiée"
+            ),
             StorageError::NewerSchema { found, supported } => write!(
                 f,
                 "la base de données (schéma v{found}) provient d'une version plus récente \
@@ -129,6 +159,9 @@ pub fn open_in_memory() -> Connection {
     migrate(&mut conn).unwrap();
     conn
 }
+
+#[cfg(test)]
+mod backup_tests;
 
 #[cfg(test)]
 mod tests {

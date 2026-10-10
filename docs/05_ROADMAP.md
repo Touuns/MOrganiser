@@ -12,17 +12,20 @@
 ## Brique 001 — Capture rapide + boîte « À organiser » (découpée en sous-étapes validées une à une)
 
 - **001-A** : boîte au-dessus du champ, saisie immédiate, destination facultative (pas un tag) et filtre, SQLite locale, relecture après relance, erreurs, tests.
-- **001-B** *(implémentée, en attente de validation)* : fiche, modification avec protection du brouillon et verrou optimiste, corbeille récupérable, « Voir tout » paginé.
+- **001-A à 001-E : validées et fusionnées dans `main` (PR #2 à #6).**
+- **001-B** : fiche, modification avec protection du brouillon et verrou optimiste, corbeille récupérable, « Voir tout » paginé.
 - **001-C** : animation ascendante, mouvement réduit.
 - **001-D** (facultatif) : option manuelle « Conserver ce choix » pour garder la destination (suggestion automatique abandonnée).
-- **001-E** *(implémentée, en attente de validation)* : initiation minimale sur le vrai champ et la vraie boîte ; proposition unique à la première utilisation, bouton « Découvrir » permanent.
+- **001-E** : initiation minimale sur le vrai champ et la vraie boîte ; proposition unique à la première utilisation, bouton « Découvrir » permanent.
 - **Critère :** une capture créée reste visible après fermeture/réouverture, sans être automatiquement classée comme tâche.
 - Voir `docs/briques/BRIQUE_001_CAPTURE_RAPIDE.md` (référence unique).
 
 ## Brique 002 — Vie d'un élément capturé
 
-- Classer/**convertir** en tâche, note ou projet, cycle de vie avancé ; conserver la source. L'édition et la suppression élémentaires d'une capture sont traitées en 001-B (décision du 2026-10-10).
+- **Périmètre décidé le 2026-10-10 :** convertir une capture en **tâche** uniquement (notes et projets attendent leurs modules) ; conserver la source ; annulation (4 s) ; vue « Traitées ». L'édition et la suppression élémentaires d'une capture sont traitées en 001-B.
+- **002-A** *(implémentée sur la branche `brique-002-preparation`, en attente de validation)* : migration 0002, tâche minimale, conversion et annulation atomiques, sauvegarde préalable aux migrations, commandes Rust. **002-B** : interface de conversion et première liste des tâches. **002-C** : vue « Traitées », provenance, restauration contrôlée.
 - **Critère :** aucune perte de texte pendant la conversion.
+- Voir `docs/briques/BRIQUE_002_VIE_ELEMENT_CAPTURE.md` (référence unique).
 
 ## Brique 003 — Actions de base et historique
 

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-list-converted-items"
+description = "Enables the list_converted_items command without any pre-configured scope."
+commands.allow = ["list_converted_items"]
+
+[[permission]]
+identifier = "deny-list-converted-items"
+description = "Denies the list_converted_items command without any pre-configured scope."
+commands.deny = ["list_converted_items"]

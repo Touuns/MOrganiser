@@ -40,6 +40,10 @@ pub struct InboxItem {
     pub updated_at: i64,
     /// Renseigné seulement pour une capture dans la corbeille.
     pub deleted_at: Option<i64>,
+    /// Renseigné seulement pour une capture transformée en tâche (« Traitées »).
+    pub converted_at: Option<i64>,
+    /// Tâche active issue de cette capture (présent si et seulement si `converted_at` l'est).
+    pub converted_task_id: Option<String>,
 }
 
 /// Position dans une liste, pour charger les éléments plus anciens. Opaque pour l'interface :
@@ -63,11 +67,13 @@ pub struct InboxPage {
     pub next_cursor: Option<Cursor>,
 }
 
-/// Où chercher : captures actives de la boîte, ou corbeille.
+/// Où chercher : captures de la boîte (ni supprimées ni converties), corbeille, ou captures
+/// converties en tâche (« Traitées »).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
     Active,
     Trash,
+    Converted,
 }
 
 /// Filtre d'affichage de la boîte. Le texte saisi n'intervient jamais ici.
@@ -141,6 +147,8 @@ pub fn create_item(
         created_at: now_ms,
         updated_at: now_ms,
         deleted_at: None,
+        converted_at: None,
+        converted_task_id: None,
     };
     conn.execute(
         "INSERT INTO inbox_items (id, content, destination_id, created_at, updated_at)
@@ -150,9 +158,10 @@ pub fn create_item(
     Ok(item)
 }
 
-const COLUMNS: &str = "id, content, destination_id, created_at, updated_at, deleted_at";
+pub(crate) const COLUMNS: &str =
+    "id, content, destination_id, created_at, updated_at, deleted_at, converted_at, converted_task_id";
 
-fn map_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<InboxItem> {
+pub(crate) fn map_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<InboxItem> {
     Ok(InboxItem {
         id: row.get(0)?,
         content: row.get(1)?,
@@ -160,6 +169,8 @@ fn map_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<InboxItem> {
         created_at: row.get(3)?,
         updated_at: row.get(4)?,
         deleted_at: row.get(5)?,
+        converted_at: row.get(6)?,
+        converted_task_id: row.get(7)?,
     })
 }
 
@@ -178,8 +189,9 @@ pub fn list_items(
     let limit = limit.clamp(1, MAX_LIST_LIMIT);
     // Clauses fixes : les valeurs fournies par l'utilisateur ne passent qu'en paramètres.
     let (scope_condition, sort_column) = match scope {
-        Scope::Active => ("deleted_at IS NULL", "created_at"),
+        Scope::Active => ("deleted_at IS NULL AND converted_at IS NULL", "created_at"),
         Scope::Trash => ("deleted_at IS NOT NULL", "deleted_at"),
+        Scope::Converted => ("deleted_at IS NULL AND converted_at IS NOT NULL", "converted_at"),
     };
     let mut conditions = vec![scope_condition.to_string()];
     let mut args: Vec<Value> = Vec::new();
@@ -220,6 +232,7 @@ pub fn list_items(
             sort_key: match scope {
                 Scope::Active => last.created_at,
                 Scope::Trash => last.deleted_at.unwrap_or(last.created_at),
+                Scope::Converted => last.converted_at.unwrap_or(last.created_at),
             },
             id: last.id.clone(),
         })
@@ -260,6 +273,11 @@ pub fn update_item(
     if current.deleted_at.is_some() {
         return Err(InboxError::Trashed);
     }
+    // Une capture transformée en tâche est en lecture seule : le texte vit désormais dans la
+    // tâche, et deux versions qui divergent seraient une perte silencieuse.
+    if current.converted_at.is_some() {
+        return Err(InboxError::Converted);
+    }
     if current.updated_at != expected_updated_at {
         return Err(InboxError::Conflict);
     }
@@ -285,14 +303,16 @@ pub fn update_item(
     let new_updated_at = now_ms.max(expected_updated_at + 1);
     let changed = conn.execute(
         "UPDATE inbox_items SET content = ?2, destination_id = ?3, updated_at = ?4
-         WHERE id = ?1 AND updated_at = ?5 AND deleted_at IS NULL",
+         WHERE id = ?1 AND updated_at = ?5 AND deleted_at IS NULL AND converted_at IS NULL",
         params![id, content, destination_id, new_updated_at, expected_updated_at],
     )?;
     if changed == 0 {
-        // Modifiée ou supprimée entre la lecture et l'écriture : on dit laquelle.
+        // Modifiée, supprimée ou convertie entre la lecture et l'écriture : on dit laquelle.
         let latest = get_item(conn, id)?;
         return Err(if latest.deleted_at.is_some() {
             InboxError::Trashed
+        } else if latest.converted_at.is_some() {
+            InboxError::Converted
         } else {
             InboxError::Conflict
         });
@@ -300,15 +320,21 @@ pub fn update_item(
     get_item(conn, id)
 }
 
-/// Met une capture à la corbeille (suppression logique, aucune donnée détruite).
+/// Met une capture à la corbeille (suppression logique, aucune donnée détruite). Une capture
+/// transformée en tâche n'y va pas : il faut d'abord annuler la conversion.
 pub fn trash_item(conn: &Connection, id: &str, now_ms: i64) -> Result<InboxItem, InboxError> {
     let changed = conn.execute(
-        "UPDATE inbox_items SET deleted_at = ?2 WHERE id = ?1 AND deleted_at IS NULL",
+        "UPDATE inbox_items SET deleted_at = ?2
+         WHERE id = ?1 AND deleted_at IS NULL AND converted_at IS NULL",
         params![id, now_ms],
     )?;
     if changed == 0 {
-        get_item(conn, id)?; // introuvable -> NotFound
-        return Err(InboxError::Trashed);
+        let current = get_item(conn, id)?; // introuvable -> NotFound
+        return Err(if current.deleted_at.is_some() {
+            InboxError::Trashed
+        } else {
+            InboxError::Converted
+        });
     }
     get_item(conn, id)
 }
@@ -339,6 +365,8 @@ pub enum InboxError {
     NotTrashed,
     /// La capture a été modifiée depuis son ouverture.
     Conflict,
+    /// La capture est transformée en tâche : lecture seule, ni corbeille ni modification.
+    Converted,
     Storage(rusqlite::Error),
     Unavailable,
 }
@@ -354,6 +382,7 @@ impl InboxError {
             InboxError::Trashed => "trashed",
             InboxError::NotTrashed => "not_trashed",
             InboxError::Conflict => "version_conflict",
+            InboxError::Converted => "converted",
             InboxError::Storage(_) => "storage",
             InboxError::Unavailable => "unavailable",
         }
@@ -374,6 +403,9 @@ impl fmt::Display for InboxError {
             InboxError::NotTrashed => write!(f, "Cette capture n'est pas dans la corbeille."),
             InboxError::Conflict => {
                 write!(f, "Cette capture a été modifiée depuis son ouverture.")
+            }
+            InboxError::Converted => {
+                write!(f, "Cette capture a été transformée en tâche : elle n'est plus modifiable ici.")
             }
             InboxError::Storage(_) => write!(f, "L'enregistrement local a échoué."),
             InboxError::Unavailable => write!(f, "La base de données est indisponible."),

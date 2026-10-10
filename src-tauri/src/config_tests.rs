@@ -91,6 +91,12 @@ fn la_capacite_n_accorde_que_les_permissions_revues() {
             "allow-update-inbox-item",
             "allow-trash-inbox-item",
             "allow-restore-inbox-item",
+            "allow-convert-inbox-item-to-task",
+            "allow-cancel-task-conversion",
+            "allow-suggest-task-title",
+            "allow-list-tasks",
+            "allow-get-task",
+            "allow-list-converted-items",
             "core:event:allow-listen",
             "core:event:allow-unlisten",
             "core:window:allow-destroy"

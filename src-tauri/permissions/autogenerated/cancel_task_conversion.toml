@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-cancel-task-conversion"
+description = "Enables the cancel_task_conversion command without any pre-configured scope."
+commands.allow = ["cancel_task_conversion"]
+
+[[permission]]
+identifier = "deny-cancel-task-conversion"
+description = "Denies the cancel_task_conversion command without any pre-configured scope."
+commands.deny = ["cancel_task_conversion"]
