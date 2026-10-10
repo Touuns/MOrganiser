@@ -108,7 +108,7 @@ Chaque sous-étape est validée par le propriétaire avant la suivante ; ce ne s
 
 - **001-A — Capture et persistance :** « À organiser » au-dessus du champ, saisie immédiate, destination facultative simple, filtre par destination, SQLite locale, relecture après relance, gestion d'erreurs, tests. Pas d'animation complexe.
 - **001-B — Gestion :** ouvrir une capture, modifier texte et destination, suppression récupérable ou annulation claire, « Voir tout », tests.
-- **001-C — Mouvement :** animation ascendante et insertion visuelle, `reduced-motion`, robustesse au redimensionnement.
+- **001-C — Mouvement (implémentée, voir section 13) :** animation ascendante et insertion visuelle, `reduced-motion`, robustesse au redimensionnement.
 - **001-D — Confort facultatif :** suggestion de conserver temporairement la destination, après validation du besoin.
 - **001-E — Initiation minimale :** spotlight sur le **vrai champ**, validation d'une capture, focus sur **la vraie boîte** ; « Passer » toujours disponible. Exemple proposé « Vendre ma PlayStation 5 » ou texte libre ; ne pas polluer des données réelles par une démo sans consentement. Le moteur complet d'initiation reste pour une brique ultérieure.
 
@@ -277,3 +277,108 @@ Principe : trois notions distinctes dans la fiche : la **référence enregistré
 **Fermeture pendant une corbeille, une restauration ou un envoi :** toutes les écritures sont suivies (`track`). La fermeture normale les attend (aucune demande en transit n'est interrompue), puis réexamine l'état avant de détruire la fenêtre. Pas de gestionnaire global : un simple ensemble de promesses.
 
 **Limites :** un arrêt forcé du processus, l'extinction de Windows ou une coupure de courant restent hors de portée (voir ci-dessus). Quand une fermeture normale attend une écriture bloquée, la fenêtre reste ouverte au plus le délai d'attente SQLite (5 s) puis le résultat est traité comme n'importe quelle réponse.
+
+## 13. Réalisation 001-C : animation d'arrivée (implémentée le 2026-10-10, en attente de validation)
+
+### Comportement
+
+Après l'enregistrement confirmé, une **carte fantôme** monte de la zone de saisie (bord supérieur du champ) jusqu'à la place de la vraie carte, en bas de la boîte. Durée **350 ms**, trajet vertical, opacité de 0,55 à 1 : aucun halo ni effet décoratif.
+
+### Principe (validé par le propriétaire)
+
+- **L'animation ne conditionne rien** : la capture est enregistrée, intégrée à la liste et utilisable normalement ; le mouvement est purement visuel et arrive après.
+- La vraie carte n'est que **masquée visuellement** (`visibility`) pendant le trajet et **toujours rétablie** (fin normale, annulation, erreur d'animation, délai de sécurité de 350 + 300 ms).
+- La carte fantôme est un **clone** de la vraie carte : mêmes dimensions et apparence, `position: fixed`, `aria-hidden`, `inert`, sans événements de pointeur, retirée à la fin.
+- Les cartes déjà présentes **glissent** de leur ancienne place vers la nouvelle (technique FLIP) au lieu de sauter quand la liste défile jusqu'en bas.
+- Technique : **Web Animations API**, sans dépendance. Code : `src/features/inbox/arrivalAnimation.ts`, branché dans `InboxPanel` (déclencheur `Arrival`) et `InboxHome` (mesure du point de départ après l'enregistrement). Aucune modification Rust, SQLite ou commande.
+
+### Cas particuliers
+
+| Situation | Comportement |
+|---|---|
+| Échec d'enregistrement | Aucune animation, texte et destination conservés |
+| Filtre excluant la capture | Aucune animation ; message « masquée par le filtre » conservé |
+| `prefers-reduced-motion: reduce` | Aucun trajet : insertion immédiate |
+| Liste ou zone de saisie non visible (fenêtre étroite avec fiche ouverte) | Insertion directe sans mouvement |
+| Deux envois rapprochés | La première arrivée est terminée net (sa carte est visible), la seconde s'anime ; aucune perte ni doublon |
+| Nouvelle saisie, clic dans la liste, ouverture d'une fiche pendant le trajet | Jamais bloqués |
+| Redimensionnement, changement de filtre, de vue ou démontage | Animation annulée, vraie carte visible |
+| API d'animation indisponible ou en erreur | Insertion directe, carte visible |
+| Vues « Voir tout » et Corbeille | Pas d'animation (insertion directe) |
+
+### Tests
+
+- Interface : 104 (dont 15 nouveaux dans `InboxHome.animation.test.tsx`) ; jsdom n'ayant ni API d'animation ni mise en page, des simulations en tiennent lieu (trajet, durée, fantôme `aria-hidden`/`inert`, vraie carte masquée puis visible, FLIP, filtre, mouvement réduit, fenêtre étroite, vue, redimensionnement, filtre, démontage, échec et délai de sécurité).
+- Fenêtre Windows Dev réelle (échantillonnage image par image, protocole DevTools local) : voir le journal.
+
+### Limites
+
+- Le mouvement n'a pas pu être capturé en une image fixe (latence de capture supérieure à 350 ms) ; sa validation repose sur l'échantillonnage des positions. À juger à l'œil lors des essais manuels.
+- Pas d'animation de retrait (corbeille) ni d'arrivée dans « Voir tout » : hors périmètre 001-C.
+
+### Mise à la corbeille : disparition et notification (ajout du 2026-10-10)
+
+L'arrivée animée est validée par le propriétaire et reste inchangée. Constat : après « Mettre à la corbeille », la fiche se refermait sur la liste sans retour assez perceptible.
+
+- **Transition de sortie :** après confirmation de la base (jamais avant), la carte concernée disparaît en fondu avec un léger rétrécissement, **220 ms**, ease-in. Carte fantôme = clone non interactif (`aria-hidden`, `inert`) ; la vraie carte n'est que masquée ; les cartes restantes glissent vers leur place (FLIP déclenché quand la liste a retiré la carte, via `MutationObserver`). Code : `playDeparture` dans `arrivalAnimation.ts`, déclenchée par `InboxHome` juste après le rendu où la fiche s'est refermée (la liste est alors visible, même en fenêtre étroite).
+- **Jamais de réactivation :** la transition ne peut pas rendre la capture de nouveau active ; la suppression logique n'est pas retardée.
+- **Notification :** « Capture déplacée dans la corbeille. » + « Annuler » (≈ 8 s). Elle est désormais **flottante** (`position: fixed`, en bas, centrée, hors du flux : aucun déplacement du champ de capture), contrastée (bordure d'accent, ombre) et accueillie par une **région vivante persistante** (`aria-live="polite"`) pour que l'ajout du message soit annoncé. La minuterie ne repart plus à chaque rendu du parent.
+- **Focus :** il passe à la carte voisine (suivante, sinon précédente), ou au champ de capture s'il n'y en a plus ; il n'est plus perdu avec la carte supprimée.
+- **Cas particuliers :**
+
+| Situation | Comportement |
+|---|---|
+| Échec de la suppression | Aucune animation ni notification, message d'erreur dans la fiche |
+| Capture absente de la liste actuelle (filtre) | Confirmation seule, aucun trajet |
+| Depuis « Voir tout » | Disparition en fondu aussi |
+| Deux suppressions rapprochées | Une seule notification, qui vise la dernière ; la première reste restaurable depuis la Corbeille |
+| « Annuler » pendant la transition | Fantôme retiré tout de suite, carte restaurée visible |
+| Mouvement réduit | Disparition immédiate, notification affichée |
+| Redimensionnement, changement de vue ou de filtre | Transition annulée proprement |
+
+- **Tests :** `InboxHome.departure.test.tsx` (13 tests) ; interface : 117 au total.
+
+### Règles UX : géométrie stable et défilement conservé (ajout du 2026-10-10)
+
+**Règle : un panneau secondaire ne déplace jamais le contenu principal.**
+
+- La colonne principale (boîte « À organiser » + capture rapide) a une position et une taille **indépendantes** de l'ouverture d'une fiche. Elle reste centrée (largeur maximale 760 px).
+- La fiche est un **panneau flottant** placé dans la zone de la boîte (jamais sur la capture rapide) :
+
+| Largeur de fenêtre | Disposition de la fiche |
+|---|---|
+| ≥ 1580 px | À droite de la colonne, sans recouvrement (380 px) |
+| 900 à 1579 px | Flottante sur la droite de la boîte (360 px), la capture rapide reste libre |
+| < 900 px | Elle remplace temporairement la vue principale (« ← Retour ») |
+
+- Technique : la fiche est un enfant en `position: absolute` d'une **scène** (`.inbox-home__stage`) qui ne contient que la vue (boîte) ; la capture rapide est hors de la scène, donc le panneau ne peut ni la recouvrir ni rien pousser. Le seuil de 900 px est conservé. *(Un premier essai d'ancrage sur la « zone de grille » n'était pas respecté par le moteur de rendu : la fiche descendait sur la capture rapide ; la scène explicite l'a corrigé.)*
+
+**Défilement : « en bas » seulement quand c'est voulu.**
+
+| Événement | Défilement |
+|---|---|
+| Premier affichage, changement de filtre | En bas |
+| Nouvelle capture | En bas (la carte arrive et s'anime) |
+| Ouverture ou fermeture d'une fiche, édition | Aucun |
+| Mise à la corbeille, restauration, relecture | Zone de lecture conservée |
+| Chargement d'anciennes captures (« Voir tout ») | Contexte conservé (déjà en place) |
+
+- Mécanisme : **ancrage par identifiant** (`scrollAnchor.ts`). Quelques cartes visibles sont mémorisées avec leur position ; après un changement, la première encore présente est remise à la même position visuelle. Si la carte supprimée était l'ancre, la suivante la remplace. L'entrée d'une capture plus ancienne dans l'ensemble des 20 affichées est compensée exactement (pas de saut).
+- « Voir tout » et la Corbeille rechargent désormais autant de captures qu'il y en avait d'affichées (au lieu de repartir de la page la plus récente).
+- Les appels à `focus()` (carte voisine, fiche, champ de capture) utilisent `preventScroll`.
+
+**Tests :** `InboxHome.scroll.test.tsx` (8) ; interface : 125 au total.
+
+**Mesures dans la fenêtre Windows Dev réelle** (rectangles `getBoundingClientRect` de la boîte, de la capture rapide et de la colonne ; avant, pendant et après ; 1700, 1200 et 960 px) :
+
+| Mesure | Résultat |
+|---|---|
+| Écart de géométrie à l'ouverture, pendant la disparition, après fermeture | **0 px** aux trois largeurs |
+| Défilement à l'ouverture de la fiche | Inchangé (601 → 601) |
+| Après suppression au milieu de la liste | Carte voisine à 238 → 237 px (compensation de l'entrée d'une capture plus ancienne) ; liste non ramenée en bas |
+| « Annuler » | Capture restaurée, liste non ramenée en bas, géométrie identique |
+| Fiche (hauteur) | 582 px = hauteur de la boîte, sans recouvrir la capture rapide ; à droite de la colonne à 1700 px |
+| Mouvement réduit | Géométrie stable, aucun fantôme, lecture conservée |
+| « Voir tout » | Géométrie stable ; voisine 142 → 142 px ; lecture conservée |
+| Changement de filtre, fiche ouverte | Boîte et capture immobiles |
+| Fenêtre de 600 px | La fiche remplace la vue ; liste et capture de retour à la fermeture |

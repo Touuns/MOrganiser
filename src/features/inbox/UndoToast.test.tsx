@@ -9,8 +9,8 @@ describe("UndoToast", () => {
 
   it("annonce le message et propose d'annuler", () => {
     const onAction = vi.fn();
-    render(<UndoToast message="Capture mise à la corbeille." actionLabel="Annuler" onAction={onAction} onDismiss={() => {}} />);
-    expect(screen.getByRole("status")).toHaveTextContent("Capture mise à la corbeille.");
+    render(<UndoToast message="Capture déplacée dans la corbeille." actionLabel="Annuler" onAction={onAction} onDismiss={() => {}} />);
+    expect(screen.getByText("Capture déplacée dans la corbeille.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
     expect(onAction).toHaveBeenCalledTimes(1);
   });

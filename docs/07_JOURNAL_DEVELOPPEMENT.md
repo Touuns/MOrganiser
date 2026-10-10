@@ -211,6 +211,44 @@
 - **Correction :** l'abandon mémorise l'empreinte du brouillon (`draftKey()`), pas un drapeau ; la fermeture réexamine l'état actuel à la reprise.
 - **Tests :** `pnpm typecheck` OK ; interface 89/89 ; Rust non modifié (69/69 au dernier passage).
 
+## 2026-10-10 — Brique 001-C : animation d'arrivée d'une capture
+
+- **Objectif :** carte fantôme montant de la zone de saisie vers le bas de la boîte, 350 ms, sans jamais retarder ni conditionner l'enregistrement.
+- **Décisions (propriétaire) :** départ = zone de saisie (pas le bouton) ; vraie carte insérée normalement puis seulement masquée visuellement pendant le trajet ; animation non bloquante ; aucune dépendance ; aucune modification Rust/SQLite.
+- **Technique :** Web Animations API ; fantôme = clone de la carte (`aria-hidden`, `inert`, non interactif) ; FLIP des cartes présentes ; annulation sûre sur resize, filtre, vue, démontage ; délai de sécurité.
+- **Fichiers :** `arrivalAnimation.ts` (nouveau), `InboxPanel.tsx`, `InboxHome.tsx`, `CaptureForm.tsx`, `CaptureCard.tsx/.css`, `InboxHome.animation.test.tsx` (nouveau), fiche brique 001 (section 13).
+- **Tests :** `pnpm typecheck` OK ; interface 104/104 (+15) ; Rust non modifié (69/69 au dernier passage).
+- **Fenêtre Dev réelle (échantillonnage par `requestAnimationFrame`) :**
+  - envoi normal : fantôme de 424 px (haut du champ) à 281 px (carte d'arrivée) en ≈ 345 ms, 22 images, trajet monotone, opacité 0,55 → 1 ; vraie carte masquée pendant, visible après, 0 fantôme restant ;
+  - deux envois à 120 ms d'intervalle : 3 cartes visibles, aucun fantôme ;
+  - mouvement réduit (émulé) : aucun fantôme, carte visible ;
+  - fenêtre de 600 px : trajet normal de 504 à 361 px en ≈ 350 ms ;
+  - redimensionnement et changement de vue en cours de trajet : fantôme retiré, vraie carte visible ;
+  - fermeture normale (code 0), `-wal` vide, `integrity_check` ok, aucun doublon, dossier Stable absent.
+- **Difficultés :** une capture d'écran en plein vol n'a pas pu être obtenue (latence > 350 ms ; le ralentissement DevTools n'agit pas sur les animations créées ensuite) ; validation par positions mesurées.
+- **Validation du propriétaire :** en attente (jugement visuel de la fluidité à faire à l'usage).
+
+## 2026-10-10 — Brique 001-C : disparition à la mise à la corbeille et notification flottante
+
+- **Demande (propriétaire, après essais) :** retour plus explicite à la suppression depuis la fiche ; arrivée animée validée et inchangée.
+- **Réalisé :** `playDeparture` (fondu 220 ms, FLIP des cartes restantes), notification flottante hors flux avec région vivante persistante, message « Capture déplacée dans la corbeille. », focus conservé sur la carte voisine, minuterie de la notification stabilisée. Aucun changement Rust, SQLite ou commande.
+- **Tests :** `pnpm typecheck` OK ; interface 117/117 (+13 : disparition, confirmation, annulation pendant la transition, suppressions rapprochées, « Voir tout », filtre, mouvement réduit, redimensionnement, vue, focus, fenêtre étroite) ; Rust non modifié.
+- **Vérification Windows réelle :** **non effectuée à ce jour** : une instance de l'application lancée par le propriétaire (démarrée à 16:11) occupait le port 1420 ; elle n'a pas été arrêtée. À faire dès que l'instance est fermée.
+- **Validation du propriétaire :** en attente.
+
+## 2026-10-10 — Brique 001-C : géométrie stable et défilement conservé
+
+- **Défauts signalés (propriétaire) :** (1) la liste revenait en bas après une suppression ; (2) ouvrir une fiche déplaçait et redimensionnait la boîte « À organiser ».
+- **Causes :** (1) un `useLayoutEffect` descendait en bas à chaque changement de `items` ; (2) la fiche était une colonne de grille qui poussait la boîte.
+- **Corrections :** ancrage de défilement par identifiant (`scrollAnchor.ts`), « en bas » réservé au premier affichage, au changement de filtre et à l'arrivée d'une capture ; « Voir tout » conserve sa profondeur à la relecture ; `preventScroll` sur les focus ; fiche en panneau flottant hors flux (règle : un panneau secondaire ne déplace jamais le contenu principal). Détails : fiche brique 001, sous-section « Règles UX ».
+- **Constat annexe :** le défilement en bas d'une nouvelle capture dépendait de la mesure de géométrie de l'animation (zone de saisie non mesurable → pas d'arrivée) ; il en est désormais indépendant.
+- **Tests :** `pnpm typecheck` OK ; interface 125/125 (+8 : conservation après suppression, ancre supprimée, édition, restauration, nouvelle capture, filtre, focus, structure du panneau) ; Rust non modifié.
+- **Vérification Windows réelle (instance du propriétaire fermée) :** rectangles de la boîte, de la capture et de la colonne mesurés avant, pendant et après, à 1700, 1200 et 960 px : **écart 0 px** partout ; défilement conservé après suppression (voisine 238 → 237 px) et après « Annuler » ; mouvement réduit, « Voir tout », filtre avec fiche ouverte et fenêtre de 600 px conformes (voir fiche brique 001).
+- **Défaut révélé par la mesure réelle :** la fiche mesurait 786 px et descendait sur la capture rapide (l'ancrage CSS sur la zone de grille n'était pas respecté). Les tests simulés ne pouvaient pas le voir. Corrigé par une scène explicite ; fiche à 582 px.
+- **Retour du propriétaire :** essais manuels satisfaisants (« ça m'a l'air parfait »).
+- **Données :** les captures « Dép … » de test restent dans la base Dev (pas de nettoyage, sur instruction).
+- **Validation du propriétaire :** en attente.
+
 ## Modèle à recopier après chaque brique
 
 ### AAAA-MM-JJ — Brique XXX : [nom]

@@ -1,13 +1,27 @@
+/* Notification flottante : hors du flux, donc sans jamais déplacer le champ de capture. */
+.toast-region {
+  position: fixed;
+  left: 50%;
+  bottom: 3.25rem;
+  z-index: 40;
+  width: max-content;
+  max-width: calc(100vw - 2rem);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
 .toast {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-3);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-muted);
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.28);
   font-size: var(--text-sm);
+  pointer-events: auto;
 }
 
 .toast__action {

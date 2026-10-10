@@ -322,7 +322,7 @@ describe("InboxHome : fiche, modification et corbeille (001-B)", () => {
     fireEvent.click(within(detail()).getByRole("button", { name: "Mettre à la corbeille" }));
     await waitFor(() => expect(texts()).toEqual(["Autre"]));
     expect(screen.queryByRole("region", { name: /Fiche/ })).not.toBeInTheDocument();
-    expect(screen.getByText("Capture mise à la corbeille.")).toBeInTheDocument();
+    expect(screen.getByText("Capture déplacée dans la corbeille.")).toBeInTheDocument();
     expect(backend.find(item.id)!.deletedAt).not.toBeNull();
     expect(backend.state.items).toHaveLength(2); // rien n'est détruit
 
@@ -353,7 +353,7 @@ describe("InboxHome : fiche, modification et corbeille (001-B)", () => {
     fireEvent.click(within(detail()).getByRole("button", { name: "Mettre à la corbeille" }));
     expect(await within(detail()).findByRole("alert")).toHaveTextContent("n'a pas été déplacée");
     expect(texts()).toEqual(["Résiste"]);
-    expect(screen.queryByText("Capture mise à la corbeille.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Capture déplacée dans la corbeille.")).not.toBeInTheDocument();
     expect(backend.find(item.id)!.deletedAt).toBeNull();
   });
 
@@ -362,7 +362,7 @@ describe("InboxHome : fiche, modification et corbeille (001-B)", () => {
     render(<InboxHome />);
     await openCard("Incertaine");
     fireEvent.click(within(detail()).getByRole("button", { name: "Mettre à la corbeille" }));
-    await screen.findByText("Capture mise à la corbeille.");
+    await screen.findByText("Capture déplacée dans la corbeille.");
     backend.state.failures.set("restore_inbox_item", { code: "storage", message: "L'enregistrement local a échoué." });
     fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("toujours dans la corbeille");

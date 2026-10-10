@@ -187,7 +187,7 @@ describe("C. réponse tardive de corbeille", () => {
 
     await release();
     await waitFor(() => expect(backend.find(a.id)!.deletedAt).not.toBeNull());
-    await screen.findByText("Capture mise à la corbeille.");
+    await screen.findByText("Capture déplacée dans la corbeille.");
     expect(detailText()).toHaveValue("Brouillon de Bravo"); // la fiche B est toujours là
     expect(screen.queryByText(/modifications non enregistrées/)).not.toBeInTheDocument();
     expect(await requestClose()).toBe(true); // et son brouillon reste protégé
@@ -269,7 +269,7 @@ describe("E. enregistrer puis mettre à la corbeille", () => {
       .filter((c) => c === "update_inbox_item" || c === "trash_inbox_item");
     expect(order).toEqual(["update_inbox_item", "trash_inbox_item"]);
     await waitFor(() => expect(screen.queryByRole("region", { name: /Fiche/ })).not.toBeInTheDocument());
-    expect(screen.getByText("Capture mise à la corbeille.")).toBeInTheDocument();
+    expect(screen.getByText("Capture déplacée dans la corbeille.")).toBeInTheDocument();
   });
 
   it("si l'enregistrement échoue, la corbeille n'est pas exécutée", async () => {
@@ -349,7 +349,7 @@ describe("Abandon limité au brouillon concerné (fermeture avec opération en c
     render(<InboxHome />);
     await openCard("Xray");
     fireEvent.click(within(detail()).getByRole("button", { name: "Mettre à la corbeille" }));
-    await screen.findByText("Capture mise à la corbeille.");
+    await screen.findByText("Capture déplacée dans la corbeille.");
     const release = hold("restore_inbox_item");
     fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
     return release;

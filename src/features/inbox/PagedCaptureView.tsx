@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { Cursor, Destination, InboxItem, InboxPage } from "./api";
 import { CaptureCard } from "./CaptureCard";
+import { recordAnchors, restoreAnchors, type Anchor } from "./scrollAnchor";
 import "./PagedCaptureView.css";
 
 /** Taille d'un lot de l'historique complet. */
@@ -39,19 +40,37 @@ export function PagedCaptureView(props: PagedCaptureViewProps) {
   const generation = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Action de défilement à exécuter après le prochain affichage de la liste.
-  const pendingScroll = useRef<{ kind: "bottom" } | { kind: "keep"; height: number; top: number } | null>(
-    null,
-  );
+  const pendingScroll = useRef<
+    { kind: "bottom" } | { kind: "anchor" } | { kind: "keep"; height: number; top: number } | null
+  >(null);
+  const anchors = useRef<Anchor[]>([]);
+  const itemsRef = useRef<InboxItem[]>([]);
+  itemsRef.current = items;
+  const lastLoader = useRef(loader);
   const labels = new Map(destinations.map((d) => [d.id, d.label]));
 
-  const loadFirst = useCallback(async () => {
+  /**
+   * Charge la page la plus récente. `keepDepth` (relecture après un changement) recharge autant
+   * de captures qu'il y en avait d'affichées, pour ne pas perdre la zone de lecture ; sinon
+   * (premier affichage, changement de filtre) on repart du bas.
+   */
+  const loadFirst = useCallback(
+    async (keepDepth = false) => {
     const current = ++generation.current;
     setLoading(true);
     try {
-      const page = await loader(null);
+      const wanted = keepDepth ? itemsRef.current.length : 0;
+      let page = await loader(null);
+      let collected = [...page.items];
+      for (let guard = 0; collected.length < wanted && page.nextCursor && guard < 20; guard++) {
+        if (current !== generation.current) return;
+        page = await loader(page.nextCursor);
+        collected = collected.concat(page.items);
+      }
       if (current !== generation.current) return;
-      pendingScroll.current = { kind: "bottom" };
-      setItems([...page.items].reverse());
+      const unique = collected.filter((item, index) => collected.findIndex((o) => o.id === item.id) === index);
+      pendingScroll.current = wanted > 0 ? { kind: "anchor" } : { kind: "bottom" };
+      setItems([...unique].reverse());
       setTotal(page.total);
       setNextCursor(page.nextCursor);
       setError(null);
@@ -61,11 +80,16 @@ export function PagedCaptureView(props: PagedCaptureViewProps) {
     } finally {
       if (current === generation.current) setLoading(false);
     }
-  }, [loader]);
+    },
+    [loader],
+  );
 
   useEffect(() => {
-    void loadFirst();
-  }, [loadFirst, reloadKey]);
+    // Un changement de filtre repart du bas ; une simple relecture garde la profondeur.
+    const filterChanged = lastLoader.current !== loader;
+    lastLoader.current = loader;
+    void loadFirst(!filterChanged);
+  }, [loadFirst, loader, reloadKey]);
 
   async function loadMore() {
     if (!nextCursor || loadingMore) return;
@@ -100,9 +124,24 @@ export function PagedCaptureView(props: PagedCaptureViewProps) {
     if (!container || !action) return;
     pendingScroll.current = null;
     if (action.kind === "bottom") container.scrollTop = container.scrollHeight;
+    // Relecture après un changement : la carte voisine mémorisée reste à la même position.
+    else if (action.kind === "anchor") restoreAnchors(container, anchors.current);
     // Les éléments ajoutés au-dessus ne doivent pas faire « sauter » ce que l'on lisait.
     else container.scrollTop = action.top + (container.scrollHeight - action.height);
+    anchors.current = recordAnchors(container);
   }, [items]);
+
+  // Position de lecture mémorisée à chaque défilement de l'utilisateur.
+  const hasScroll = items.length > 0 && !error;
+  useEffect(() => {
+    const container = scrollRef.current;
+    if (!container) return;
+    const remember = () => {
+      anchors.current = recordAnchors(container);
+    };
+    container.addEventListener("scroll", remember, { passive: true });
+    return () => container.removeEventListener("scroll", remember);
+  }, [hasScroll]);
 
   const remaining = total - items.length;
 
@@ -119,7 +158,7 @@ export function PagedCaptureView(props: PagedCaptureViewProps) {
       {error && (
         <div className="paged__message" role="alert">
           <p>{error}</p>
-          <button type="button" className="paged__button" onClick={() => void loadFirst()}>
+          <button type="button" className="paged__button" onClick={() => void loadFirst(false)}>
             Réessayer
           </button>
         </div>

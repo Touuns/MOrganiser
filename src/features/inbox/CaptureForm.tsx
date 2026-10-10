@@ -8,6 +8,8 @@ export interface CaptureFormHandle {
   hasUnsent: () => boolean;
   /** Empreinte du texte et de la destination actuels : sert à reconnaître un abandon. */
   draftKey: () => string;
+  /** Bord supérieur de la zone de saisie (repère de la fenêtre), ou `null` si elle n'est pas visible. */
+  inputTop: () => number | null;
   /** Replace le curseur dans le champ. */
   focus: () => void;
   /** Envoie la saisie ; `true` si elle est enregistrée (ou s'il n'y avait rien à envoyer). */
@@ -79,7 +81,7 @@ export function CaptureForm(props: CaptureFormProps) {
       // entre-temps n'est jamais perdue.
       if (draft.current.text === sentText) setText("");
       if (draft.current.destinationId === sentDestination) setDestinationId("");
-      textareaRef.current?.focus();
+      textareaRef.current?.focus({ preventScroll: true });
       props.onSent?.();
       return true;
     } catch (cause) {
@@ -95,7 +97,11 @@ export function CaptureForm(props: CaptureFormProps) {
   useImperativeHandle(props.ref, () => ({
     hasUnsent: () => draft.current.text.trim() !== "",
     draftKey: () => `${draft.current.text}\u0000${draft.current.destinationId}`,
-    focus: () => textareaRef.current?.focus(),
+    inputTop: () => {
+      const rect = textareaRef.current?.getBoundingClientRect();
+      return rect && rect.height > 0 ? rect.top : null;
+    },
+    focus: () => textareaRef.current?.focus({ preventScroll: true }),
     submit,
   }));
 
