@@ -36,6 +36,7 @@ interface InboxPanelProps {
   onOpen: (item: InboxItem) => void;
   onShowAll: () => void;
   onShowTrash: () => void;
+  onShowTasks: () => void;
   /** Capture à mettre en évidence pendant la visite d'initiation. */
   highlightId?: string | null;
 }
@@ -171,6 +172,9 @@ export function InboxPanel(props: InboxPanelProps) {
         </h2>
         <div className="inbox__tools">
           <FilterSelect destinations={destinations} filter={filter} onChange={onFilterChange} />
+          <button type="button" className="inbox__link" onClick={props.onShowTasks}>
+            Tâches
+          </button>
           <button type="button" className="inbox__link" onClick={props.onShowTrash}>
             Corbeille
           </button>

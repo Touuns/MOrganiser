@@ -3,7 +3,8 @@ import "./LeaveBanner.css";
 
 interface LeaveBannerProps {
   message: string;
-  saveLabel: string;
+  /** Absent : rien à enregistrer (seul un titre de conversion est en jeu). */
+  saveLabel?: string;
   discardLabel: string;
   keepLabel: string;
   onSave: () => void;
@@ -30,9 +31,11 @@ export function LeaveBanner(props: LeaveBannerProps) {
     <div className="leave" role="alert">
       <p>{props.message}</p>
       <div className="leave__actions">
-        <button type="button" onClick={props.onSave} disabled={props.saving}>
-          {props.saveLabel}
-        </button>
+        {props.saveLabel !== undefined && (
+          <button type="button" onClick={props.onSave} disabled={props.saving}>
+            {props.saveLabel}
+          </button>
+        )}
         <button type="button" onClick={props.onDiscard}>
           {props.discardLabel}
         </button>
