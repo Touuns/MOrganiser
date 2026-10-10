@@ -78,12 +78,18 @@ Le contrôle facultatif de la capture **ne sélectionne pas des tags descriptifs
 - Boîte utilisable avec de nombreuses entrées : nombre limité de cartes à l'accueil, « Voir tout » ; ne pas charger des centaines de lignes.
 - Pas de transformation en tâche ou facture tant que les modules correspondants n'existent pas (brique 002 et suivantes).
 
-## 6. Destination temporairement conservée (001-D, amélioration différée)
+## 6. Destination conservée à la demande (001-D, option manuelle)
 
-- **Défaut :** remise à « Aucune » après chaque sauvegarde réussie.
-- **Idée retenue, non requise pour 001-A :** après deux captures consécutives vers la même destination, une suggestion discrète et **non bloquante** peut proposer de la conserver pendant une courte session (~10 minutes), refusable et annulable à tout moment.
-- Pas de rappel répétitif, de popup intrusif ni d'IA : une simple règle locale.
-- À développer **seulement si le bénéfice est confirmé à l'usage**.
+**Décision du 2026-10-10 :** la suggestion automatique après deux captures identiques (minuterie de ~10 minutes) est **abandonnée**. Elle est remplacée par une option manuelle, « Conserver ce choix », près du sélecteur de destination.
+
+- **Défaut :** option décochée ; la destination revient à « Aucune » après chaque sauvegarde réussie.
+- **Cochée avec une destination :** cette destination reste sélectionnée après les envois réussis suivants.
+- L'utilisateur peut changer de destination à tout moment ; si l'option reste cochée, le nouveau choix est conservé.
+- Sélectionner « Aucune » désactive la conservation (l'option est alors grisée et décochée).
+- Décocher l'option ne supprime pas la destination de la capture en cours : elle est réinitialisée après le prochain envoi réussi.
+- **Échec de sauvegarde :** texte, destination et état de l'option sont conservés.
+- **Relance de l'application :** conservation désactivée, destination « Aucune » (rien n'est enregistré).
+- Aucune détection de captures identiques, aucune suggestion, aucune minuterie, aucune IA, aucun stockage, aucune modification Rust ni SQLite.
 
 ## 7. Persistance, identité, sécurité
 
@@ -109,7 +115,7 @@ Chaque sous-étape est validée par le propriétaire avant la suivante ; ce ne s
 - **001-A — Capture et persistance :** « À organiser » au-dessus du champ, saisie immédiate, destination facultative simple, filtre par destination, SQLite locale, relecture après relance, gestion d'erreurs, tests. Pas d'animation complexe.
 - **001-B — Gestion :** ouvrir une capture, modifier texte et destination, suppression récupérable ou annulation claire, « Voir tout », tests.
 - **001-C — Mouvement (implémentée, voir section 13) :** animation ascendante et insertion visuelle, `reduced-motion`, robustesse au redimensionnement.
-- **001-D — Confort facultatif :** suggestion de conserver temporairement la destination, après validation du besoin.
+- **001-D — Confort facultatif (option manuelle, voir section 6) :** case « Conserver ce choix » près de la destination ; la suggestion automatique est abandonnée.
 - **001-E — Initiation minimale :** spotlight sur le **vrai champ**, validation d'une capture, focus sur **la vraie boîte** ; « Passer » toujours disponible. Exemple proposé « Vendre ma PlayStation 5 » ou texte libre ; ne pas polluer des données réelles par une démo sans consentement. Le moteur complet d'initiation reste pour une brique ultérieure.
 
 **Répartition avec la brique 002 (décision du 2026-10-10) :** l'édition et la suppression élémentaires d'une capture relèvent de 001-B ; la **conversion** en tâche/note/projet et le cycle de vie avancé restent en brique 002.
@@ -126,7 +132,7 @@ Chaque sous-étape est validée par le propriétaire avant la suivante ; ce ne s
 - Accents, apostrophes, longues lignes, `'; DROP TABLE inbox_items; --` → texte affiché tel quel, sans exécution.
 - Échec simulé de SQLite → texte et destination préservés, aucun succès affiché.
 - Les éléments non traités restent visibles même avec une destination.
-- Après création : destination réinitialisée (sa conservation temporaire est hors 001-A).
+- Après création : destination réinitialisée, sauf si « Conserver ce choix » est coché (001-D) ; la case est décochée à chaque lancement.
 - 001-B : modifier, relancer → nouvelle valeur persistée ; supprimer puis restaurer/annuler.
 - 001-C : animation réellement **du bas vers le haut** ; mouvement réduit respecté ; clavier conservé.
 - Aucune commande Rust non déclarée/autorisée, aucune fuite vers Stable, aucune donnée réelle dans le dépôt.

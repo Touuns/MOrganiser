@@ -51,6 +51,20 @@
   color: var(--color-text-muted);
 }
 
+.capture__keep {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.capture__keep:has(input:disabled) {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .capture__hint {
   flex: 1;
   min-width: 0;
