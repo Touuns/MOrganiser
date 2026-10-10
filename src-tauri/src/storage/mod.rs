@@ -21,9 +21,24 @@ pub const SCHEMA_VERSION: u32 = MIGRATIONS.len() as u32;
 /// Ouvre (ou crée) la base, applique les réglages puis les migrations manquantes.
 pub fn open(path: &Path) -> Result<Connection, StorageError> {
     let mut conn = Connection::open(path)?;
+    // D'abord une simple lecture : une base d'une version future est refusée AVANT tout
+    // réglage susceptible de la modifier (le passage en WAL est écrit dans le fichier).
+    check_schema_version(&conn)?;
     configure(&conn)?;
     migrate(&mut conn)?;
     Ok(conn)
+}
+
+/// Lit la version du schéma (lecture seule) et refuse une version plus récente.
+fn check_schema_version(conn: &Connection) -> Result<u32, StorageError> {
+    let current: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if current > SCHEMA_VERSION {
+        return Err(StorageError::NewerSchema {
+            found: current,
+            supported: SCHEMA_VERSION,
+        });
+    }
+    Ok(current)
 }
 
 fn configure(conn: &Connection) -> Result<(), StorageError> {
@@ -42,14 +57,8 @@ fn configure(conn: &Connection) -> Result<(), StorageError> {
 
 /// Applique les migrations manquantes et renvoie la version finale du schéma.
 pub fn migrate(conn: &mut Connection) -> Result<u32, StorageError> {
-    let current: u32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if current > SCHEMA_VERSION {
-        // Base créée par une version plus récente : ne rien toucher.
-        return Err(StorageError::NewerSchema {
-            found: current,
-            supported: SCHEMA_VERSION,
-        });
-    }
+    // Contrôle répété ici pour que `migrate` reste sûre si elle est appelée seule.
+    let current = check_schema_version(conn)?;
     for (index, sql) in MIGRATIONS.iter().enumerate().skip(current as usize) {
         let tx = conn.transaction()?;
         tx.execute_batch(sql)?;
@@ -168,6 +177,37 @@ mod tests {
             .query_row("SELECT count(*) FROM sqlite_master WHERE type = 'table'", [], |row| row.get(0))
             .unwrap();
         assert_eq!(tables, 0, "aucune table ne doit avoir été créée");
+    }
+
+    #[test]
+    fn une_base_future_en_journal_classique_reste_strictement_intacte() {
+        // Base d'une version future, en journalisation classique (DELETE, pas WAL),
+        // avec une donnée : le refus ne doit RIEN modifier, pas même le mode de journal.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(DB_FILE_NAME);
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.pragma_update(None, "journal_mode", "DELETE").unwrap();
+            conn.execute_batch("CREATE TABLE future (x TEXT); INSERT INTO future VALUES ('v99');")
+                .unwrap();
+            conn.pragma_update(None, "user_version", 99).unwrap();
+        }
+        let before = std::fs::read(&path).unwrap();
+
+        assert!(matches!(
+            open(&path),
+            Err(StorageError::NewerSchema { found: 99, .. })
+        ));
+
+        let after = std::fs::read(&path).unwrap();
+        // Octets 18-19 de l'en-tête : 1 = journal classique, 2 = WAL.
+        assert_eq!(after[18..20], before[18..20], "le refus a changé le mode de journal");
+        assert!(after == before, "le refus a modifié le fichier de base");
+        assert!(!wal(&path).exists(), "aucun fichier -wal ne doit être créé");
+        let conn = Connection::open(&path).unwrap();
+        let journal: String = conn.pragma_query_value(None, "journal_mode", |row| row.get(0)).unwrap();
+        assert_eq!(journal.to_lowercase(), "delete", "le mode de journal a été changé");
+        assert_eq!(user_version(&conn), 99);
     }
 
     #[test]

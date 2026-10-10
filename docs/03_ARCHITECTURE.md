@@ -19,7 +19,7 @@ Sécurité de la fenêtre : politique de sécurité du contenu (CSP) stricte dan
 Environnements : voir `docs/briques/BRIQUE_000_FONDATIONS.md` (identifiants, dossiers, garde-fous Dev/Stable).
 
 Persistance (depuis 001-A) :
-- `src-tauri/src/storage/` : ouverture de la base, réglages (`foreign_keys`, WAL), migrations SQL versionnées (`src-tauri/migrations/NNNN_*.sql`, numéro dans `PRAGMA user_version`, une transaction par migration ; base plus récente que l'application refusée).
+- `src-tauri/src/storage/` : ouverture de la base, réglages (`foreign_keys`, WAL), migrations SQL versionnées (`src-tauri/migrations/NNNN_*.sql`, numéro dans `PRAGMA user_version`, une transaction par migration ; base plus récente que l'application refusée avant tout réglage, donc sans être modifiée).
 - Un module par domaine (`src-tauri/src/inbox.rs` pour « À organiser ») : validation, requêtes paramétrées, testé sur bases temporaires.
 - Une seule connexion partagée, protégée par un verrou ; les commandes Tauri (`commands.rs`) ne font que relayer vers les modules de domaine.
 - Côté interface, une fonctionnalité regroupe ses composants et son unique module d'appel Rust (`src/features/<fonction>/`).

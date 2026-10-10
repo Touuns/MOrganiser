@@ -112,6 +112,14 @@
   - Dossier Stable : absent.
 - **Données Dev :** 22 captures fictives (les miennes et les 3 du propriétaire).
 
+## 2026-10-10 — Brique 001-A : correctif après revue GitHub (bases de version future)
+
+- **Observation de la revue (ChatGPT, commit `cd9da28`) :** `open()` appliquait les réglages (dont `journal_mode = WAL`) avant de vérifier `user_version` ; une base de version future pouvait donc être modifiée avant d'être refusée.
+- **Vérification :** confirmée par un test écrit avant la correction : sur une base v99 en journal classique, le refus faisait passer l'en-tête du fichier en WAL (octets 18-19 : `1,1` → `2,2`) et incrémentait son compteur de modifications.
+- **Correction (sans refonte) :** `check_schema_version()` lit la version (lecture seule) en premier dans `open()` ; les réglages et migrations ne viennent qu'ensuite ; `migrate()` réutilise le même contrôle.
+- **Fichiers modifiés :** `src-tauri/src/storage/mod.rs`, fiche brique 001, `03_ARCHITECTURE.md`.
+- **Tests exécutés / résultats réels :** nouveau test `une_base_future_en_journal_classique_reste_strictement_intacte` (fichier identique octet pour octet, pas de `-wal` créé, mode `delete` conservé, `user_version` = 99) ; `pnpm typecheck` OK ; `pnpm test` : 25/25 interface, 47/47 Rust (+1 ignoré) ; le test des réglages WAL/FULL des bases compatibles reste vert.
+
 ## Modèle à recopier après chaque brique
 
 ### AAAA-MM-JJ — Brique XXX : [nom]

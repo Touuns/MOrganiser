@@ -166,7 +166,7 @@ Chaque sous-étape est validée par le propriétaire avant la suivante ; ce ne s
 
 ### Choix techniques
 
-- **Base :** `%LOCALAPPDATA%\com.morganiser.desktop.dev\data\morganiser.db` en Dev ; numéro de schéma dans `PRAGMA user_version` ; base d'une version plus récente refusée sans être modifiée.
+- **Base :** `%LOCALAPPDATA%\com.morganiser.desktop.dev\data\morganiser.db` en Dev ; numéro de schéma dans `PRAGMA user_version` ; base d'une version plus récente refusée **sans être modifiée** : la version est lue en premier, avant tout réglage (le passage en WAL est écrit dans le fichier et ne doit jamais toucher une base future). Ordre à l'ouverture : contrôle de version → réglages (WAL, FULL, clés étrangères) → migrations.
 - **Durabilité :** `synchronous = FULL` : chaque capture confirmée est forcée sur le disque avant que l'interface n'affiche le succès ; elle survit à un arrêt brutal, y compris une coupure de courant.
 - **Checkpoint à la fermeture normale :** `PRAGMA wal_checkpoint(TRUNCATE)` reporte le contenu de `-wal` dans `.db`. C'est une **commodité, pas une garantie ni une sauvegarde** :
   - l'opération est sûre par construction : SQLite ne vide `-wal` qu'après avoir écrit et synchronisé `.db` ; interrompue, elle laisse `-wal` intact ;
@@ -179,7 +179,7 @@ Chaque sous-étape est validée par le propriétaire avant la suivante ; ce ne s
 
 ### Tests
 
-- Rust (46 au total, plus 1 test « sous-processus » ignoré en exécution normale) : 8 sur le stockage (migrations, base plus récente refusée, réglages dont `synchronous = FULL`, checkpoint complet, **arrêt brutal réel d'un sous-processus après validation sans perte**, copie de `.db` seul insuffisante contre `.db` + `-wal` complète, checkpoint bloqué signalé sans perte), 17 sur la logique « À organiser », 9 de configuration (dont cohérence `build.rs` ↔ capacité ↔ `lib.rs`), et ceux de la brique 000.
+- Rust (47 au total, plus 1 test « sous-processus » ignoré en exécution normale) : 9 sur le stockage (migrations, base plus récente refusée, base future en journal classique laissée **octet pour octet** intacte, réglages dont `synchronous = FULL`, checkpoint complet, **arrêt brutal réel d'un sous-processus après validation sans perte**, copie de `.db` seul insuffisante contre `.db` + `-wal` complète, checkpoint bloqué signalé sans perte), 17 sur la logique « À organiser », 9 de configuration (dont cohérence `build.rs` ↔ capacité ↔ `lib.rs`), et ceux de la brique 000.
 - Interface (25) : 11 sur la capture, 10 sur l'accueil (avec une fausse base en mémoire, dont l'ordre chronologique et la sélection des plus récentes au-delà de 20), 4 sur l'application.
 - Essais réels dans la fenêtre Dev (pilotée par le protocole DevTools local) : voir le journal du 2026-10-10.
 
