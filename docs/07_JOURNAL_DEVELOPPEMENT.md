@@ -204,6 +204,13 @@
 - **Fichiers modifiés :** `CaptureDetail.tsx`, `CaptureForm.tsx`, `InboxHome.tsx`, nouveau `InboxHome.async.test.tsx`, fiche brique 001, journal.
 - **Limites :** voir la fiche (arrêt forcé, coupure de courant). **Validation du propriétaire :** en attente ; commit correctif non créé.
 
+## 2026-10-10 — Brique 001-B : abandon limité au brouillon concerné (revue GitHub de `b1f3cc2`)
+
+- **Défaut :** `skipDetail`/`skipForm` restaient vrais jusqu'à la destruction de la fenêtre : un texte B saisi pendant l'attente d'une écriture, après l'abandon de A, était considéré abandonné et détruit à la fermeture.
+- **Reproduction :** 2 tests déterministes (fiche, capture rapide) échouaient avant correction ; un troisième (brouillon inchangé abandonné → fermeture sans nouvel avertissement) servait de garde-fou.
+- **Correction :** l'abandon mémorise l'empreinte du brouillon (`draftKey()`), pas un drapeau ; la fermeture réexamine l'état actuel à la reprise.
+- **Tests :** `pnpm typecheck` OK ; interface 89/89 ; Rust non modifié (69/69 au dernier passage).
+
 ## Modèle à recopier après chaque brique
 
 ### AAAA-MM-JJ — Brique XXX : [nom]

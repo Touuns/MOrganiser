@@ -6,6 +6,8 @@ import "./CaptureForm.css";
 export interface CaptureFormHandle {
   /** Du texte saisi n'a pas encore été envoyé. */
   hasUnsent: () => boolean;
+  /** Empreinte du texte et de la destination actuels : sert à reconnaître un abandon. */
+  draftKey: () => string;
   /** Replace le curseur dans le champ. */
   focus: () => void;
   /** Envoie la saisie ; `true` si elle est enregistrée (ou s'il n'y avait rien à envoyer). */
@@ -92,6 +94,7 @@ export function CaptureForm(props: CaptureFormProps) {
 
   useImperativeHandle(props.ref, () => ({
     hasUnsent: () => draft.current.text.trim() !== "",
+    draftKey: () => `${draft.current.text}\u0000${draft.current.destinationId}`,
     focus: () => textareaRef.current?.focus(),
     submit,
   }));

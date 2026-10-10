@@ -28,9 +28,12 @@ type Status = { kind: "ok" | "error"; text: string } | null;
 /** Une demande de fermeture de la fenêtre : annulable, et réexaminée à chaque étape. */
 interface CloseRequest {
   cancelled: boolean;
-  /** L'utilisateur a choisi d'abandonner ce brouillon pour cette fermeture. */
-  skipDetail: boolean;
-  skipForm: boolean;
+  /**
+   * Brouillons que l'utilisateur a explicitement abandonnés pour cette fermeture, repérés par
+   * leur contenu : une saisie différente faite ensuite n'est jamais considérée abandonnée.
+   */
+  abandonedDetail: string | null;
+  abandonedForm: string | null;
   closeWindow: () => void;
 }
 
@@ -122,10 +125,11 @@ export function InboxHome() {
   async function advanceClose(request: CloseRequest) {
     for (;;) {
       if (request.cancelled) return;
-      if (!request.skipDetail && detailRef.current?.hasUnsaved()) {
-        detailRef.current.requestLeave(
+      const detail = detailRef.current;
+      if (detail?.hasUnsaved() && detail.draftKey() !== request.abandonedDetail) {
+        detail.requestLeave(
           (outcome) => {
-            if (outcome === "discarded") request.skipDetail = true;
+            if (outcome === "discarded") request.abandonedDetail = detail.draftKey();
             void advanceClose(request);
           },
           () => {
@@ -134,7 +138,8 @@ export function InboxHome() {
         );
         return;
       }
-      if (!request.skipForm && formRef.current?.hasUnsent()) {
+      const form = formRef.current;
+      if (form?.hasUnsent() && form.draftKey() !== request.abandonedForm) {
         setPrompt({ request, error: null, sending: false });
         return;
       }
@@ -158,7 +163,12 @@ export function InboxHome() {
     (closeWindow) => {
       if (closeRequest.current) closeRequest.current.cancelled = true;
       setPrompt(null);
-      const request: CloseRequest = { cancelled: false, skipDetail: false, skipForm: false, closeWindow };
+      const request: CloseRequest = {
+        cancelled: false,
+        abandonedDetail: null,
+        abandonedForm: null,
+        closeWindow,
+      };
       closeRequest.current = request;
       void advanceClose(request);
     },
@@ -271,7 +281,7 @@ export function InboxHome() {
             error={closePrompt.error}
             onSave={() => void sendBeforeClosing()}
             onDiscard={() => {
-              closePrompt.request.skipForm = true;
+              closePrompt.request.abandonedForm = formRef.current?.draftKey() ?? null;
               setPrompt(null);
               void advanceClose(closePrompt.request);
             }}

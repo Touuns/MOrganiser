@@ -234,7 +234,7 @@ Chaque sous-étape est validée par le propriétaire avant la suivante ; ce ne s
 ### Tests
 
 - Rust : 69 (+1 sous-processus ignoré) ; **22 nouveaux** : modification et dates, horloge figée, deux modifications à la même milliseconde, garde atomique du `UPDATE`, introuvable/corbeille/conflit, texte vide ou trop long, destination archivée inchangée, corbeille et restauration à l'identique, tri de la corbeille, pagination sans doublon à dates égales, ajouts pendant la pagination, filtres, persistance après réouverture, échecs d'écriture, format JSON.
-- Interface : 86 (dont 61 nouveaux : fiche, édition, annulation, avertissements, échec, conflit, corbeille, restauration, notification, lots de 50, défilement, filtres, ajouts pendant la consultation).
+- Interface : 89 (dont 64 nouveaux : fiche, édition, annulation, avertissements, échec, conflit, corbeille, restauration, notification, lots de 50, défilement, filtres, ajouts pendant la consultation).
 
 ### Limites connues
 
@@ -268,7 +268,7 @@ Principe : trois notions distinctes dans la fiche : la **référence enregistré
 | # | Défaut | Règle appliquée |
 |---|---|---|
 | A | La réponse tardive d'un enregistrement remplaçait la saisie suivante | La référence passe à la version enregistrée ; le brouillon n'est remplacé que s'il n'a pas changé depuis l'envoi. Le départ en attente n'a lieu que si plus rien n'est non enregistré. |
-| B | Une fermeture différée aboutissait malgré une nouvelle saisie ou « Continuer à écrire » | Chaque demande de fermeture est un objet annulable ; chaque décision relance l'examen de l'état ACTUEL (fiche, capture rapide, écritures en cours) avant toute destruction ; une nouvelle demande annule la précédente ; l'avertissement périmé reprend la fermeture dès que l'envoi a abouti. |
+| B | Une fermeture différée aboutissait malgré une nouvelle saisie ou « Continuer à écrire » | Chaque demande de fermeture est un objet annulable ; chaque décision relance l'examen de l'état ACTUEL (fiche, capture rapide, écritures en cours) avant toute destruction ; une nouvelle demande annule la précédente ; un abandon est mémorisé **par contenu** (empreinte du brouillon) : une saisie différente faite ensuite, même pendant l'attente d'une écriture, est proposée à son tour, alors qu'un brouillon inchangé et déjà abandonné n'est pas redemandé ; l'avertissement périmé reprend la fermeture dès que l'envoi a abouti. |
 | C | La corbeille de A fermait la fiche B | Le résultat porte l'identifiant de A : il ne ferme que la fiche de A, si elle est encore ouverte et sans saisie récente ; sinon notification seule. Une saisie faite pendant l'attente est conservée. |
 | D | Un brouillon n'était plus protégé quand la capture était supprimée ailleurs | `hasUnsaved()` = divergence du brouillon, indépendamment du droit d'enregistrer. « Enregistrer » explique qu'il faut d'abord restaurer ; « Annuler les modifications » est proposé aussi dans la fiche d'une capture supprimée. |
 | E | « Enregistrer puis corbeille » ne mettait pas à la corbeille | L'action enchaînée est lancée après la libération effective du verrou, et seulement si l'enregistrement a réussi. |

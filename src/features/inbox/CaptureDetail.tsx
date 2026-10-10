@@ -30,6 +30,8 @@ export interface CaptureDetailHandle {
    * un texte reste protégé même si la capture a été supprimée ailleurs.
    */
   hasUnsaved: () => boolean;
+  /** Empreinte du brouillon actuel (capture + texte + destination) : sert à reconnaître un abandon. */
+  draftKey: () => string;
   /**
    * Demande à quitter la fiche (autre capture, autre vue, fermeture de la fenêtre) :
    * `proceed` est appelé tout de suite s'il n'y a rien à perdre, sinon après le choix de
@@ -124,6 +126,8 @@ export function CaptureDetail(props: CaptureDetailProps) {
 
   useImperativeHandle(props.ref, () => ({
     hasUnsaved: () => isDirty(),
+    draftKey: () =>
+      `${model.current.baseline.id}\u0000${model.current.text}\u0000${model.current.destinationId}`,
     requestLeave(proceed, cancel) {
       if (isDirty()) setLeave({ proceed, cancel });
       else proceed("clean");

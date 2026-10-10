@@ -340,3 +340,64 @@ describe("Point complémentaire : fermeture pendant une corbeille ou une restaur
     expect(backend.find(item.id)!.deletedAt).toBeNull();
   });
 });
+
+describe("Abandon limité au brouillon concerné (fermeture avec opération en cours)", () => {
+  /** Une restauration reste en vol (via « Annuler »), la fiche ouverte est celle d'une autre capture. */
+  async function withRestoreInFlight() {
+    backend.seed("Xray");
+    backend.seed("Yankee");
+    render(<InboxHome />);
+    await openCard("Xray");
+    fireEvent.click(within(detail()).getByRole("button", { name: "Mettre à la corbeille" }));
+    await screen.findByText("Capture mise à la corbeille.");
+    const release = hold("restore_inbox_item");
+    fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
+    return release;
+  }
+
+  it("fiche : brouillon A abandonné, puis B saisi pendant l'attente → B est proposé, jamais perdu", async () => {
+    const release = await withRestoreInFlight();
+    await openCard("Yankee");
+    fireEvent.change(detailText(), { target: { value: "Brouillon A" } });
+    expect(await requestClose()).toBe(true);
+    await leaveBanner();
+    fireEvent.click(screen.getByRole("button", { name: "Abandonner les modifications" }));
+    expect(appWindow.destroy).not.toHaveBeenCalled(); // l'opération en cours est attendue
+
+    fireEvent.change(detailText(), { target: { value: "Brouillon B" } });
+    await release();
+    await leaveBanner(); // B n'a jamais été abandonné : il est proposé à son tour
+    expect(appWindow.destroy).not.toHaveBeenCalled();
+    expect(detailText()).toHaveValue("Brouillon B");
+  });
+
+  it("capture rapide : texte A abandonné, puis B saisi pendant l'attente → B est proposé, jamais perdu", async () => {
+    const release = await withRestoreInFlight();
+    fireEvent.change(field(), { target: { value: "Texte A" } });
+    expect(await requestClose()).toBe(true);
+    await captureBanner();
+    fireEvent.click(screen.getByRole("button", { name: "Abandonner ce texte" }));
+    expect(appWindow.destroy).not.toHaveBeenCalled();
+
+    fireEvent.change(field(), { target: { value: "Texte B" } });
+    await release();
+    await captureBanner();
+    expect(appWindow.destroy).not.toHaveBeenCalled();
+    expect(field()).toHaveValue("Texte B");
+  });
+
+  it("un brouillon inchangé et explicitement abandonné n'est pas redemandé : la fermeture aboutit", async () => {
+    const release = await withRestoreInFlight();
+    await openCard("Yankee");
+    fireEvent.change(detailText(), { target: { value: "Brouillon A" } });
+    fireEvent.change(field(), { target: { value: "Texte A" } });
+    expect(await requestClose()).toBe(true);
+    await leaveBanner();
+    fireEvent.click(screen.getByRole("button", { name: "Abandonner les modifications" }));
+    await captureBanner();
+    fireEvent.click(screen.getByRole("button", { name: "Abandonner ce texte" }));
+    await release();
+    await waitFor(() => expect(appWindow.destroy).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/non enregistrées|non envoyé/)).not.toBeInTheDocument();
+  });
+});
