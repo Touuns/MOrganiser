@@ -178,3 +178,11 @@ export function listTasks(limit: number, before: Cursor | null = null): Promise<
 export function getTask(id: string): Promise<Task> {
   return call("get_task", { id });
 }
+
+/**
+ * Captures ACTUELLEMENT converties en tâche (« Traitées »), de la plus récemment traitée à la
+ * plus ancienne. Ce n'est pas un historique : une conversion annulée en sort.
+ */
+export function listConvertedItems(limit: number, before: Cursor | null = null): Promise<InboxPage> {
+  return call("list_converted_items", { limit, before });
+}

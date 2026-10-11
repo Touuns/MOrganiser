@@ -230,3 +230,7 @@
   flex-wrap: wrap;
   gap: var(--space-2);
 }
+
+.detail__banner .detail__convert-actions {
+  margin-top: var(--space-2);
+}

@@ -8,6 +8,7 @@ import {
   type Ref,
 } from "react";
 import {
+  cancelTaskConversion,
   convertInboxItemToTask,
   getInboxItem,
   InboxApiError,
@@ -69,12 +70,19 @@ interface CaptureDetailProps {
   onConverted: (conversion: Conversion, closeSheet: boolean) => void;
   /** Ouvre la tâche issue de cette capture (capture déjà convertie). */
   onOpenTask: (taskId: string) => void;
+  /**
+   * La capture est de retour dans la boîte, CONFIRMÉ par Rust (tâche annulée, capture à
+   * l'identique). `closeSheet` : cette fiche est toujours là et peut se fermer.
+   */
+  onReturned: (item: InboxItem, closeSheet: boolean) => void;
+  /** L'état a changé hors de cette fiche (ex. conversion déjà annulée) : relire les listes. */
+  onStateChanged: () => void;
   /** Déclare une opération d'écriture en cours (la fermeture de la fenêtre l'attend). */
   track: <T>(operation: Promise<T>) => Promise<T>;
   ref?: Ref<CaptureDetailHandle>;
 }
 
-type Busy = "save" | "trash" | "restore" | "convert" | null;
+type Busy = "save" | "trash" | "restore" | "convert" | "return" | null;
 interface PendingLeave {
   proceed: (outcome: LeaveOutcome) => void;
   cancel?: () => void;
@@ -90,6 +98,7 @@ interface PendingLeave {
  */
 export function CaptureDetail(props: CaptureDetailProps) {
   const { item, destinations, onClose, onSaved, onTrashed, onRestored, onConverted, onOpenTask, track } = props;
+  const { onReturned, onStateChanged } = props;
   const [baseline, setBaselineState] = useState(item);
   const [text, setTextState] = useState(item.content);
   const [destinationId, setDestinationState] = useState(item.destinationId ?? "");
@@ -101,6 +110,10 @@ export function CaptureDetail(props: CaptureDetailProps) {
   const [conversion, setConversionState] = useState<ConversionDraft>(NO_CONVERSION);
   const [conversionError, setConversionError] = useState<string | null>(null);
   const [suggesting, setSuggesting] = useState(false);
+  // Confirmation intégrée de « Remettre dans la boîte » (non modale).
+  const [returnPanel, setReturnPanel] = useState(false);
+  const keepInTreatedRef = useRef<HTMLButtonElement>(null);
+  const returnButtonRef = useRef<HTMLButtonElement>(null);
   // Identifie la demande de titre en cours : une réponse d'une demande périmée est ignorée.
   const suggestion = useRef(0);
   const inFlight = useRef(false);
@@ -125,6 +138,7 @@ export function CaptureDetail(props: CaptureDetailProps) {
   const destinationFieldId = useId();
   const errorId = useId();
   const conversionHeadingId = useId();
+  const returnHeadingId = useId();
   const titleFieldId = useId();
   const titleErrorId = useId();
 
@@ -163,6 +177,7 @@ export function CaptureDetail(props: CaptureDetailProps) {
   const converted = baseline.convertedAt !== null;
   const dirty = text !== baseline.content || destinationId !== (baseline.destinationId ?? "");
   const converting = conversion.open;
+  const returning = returnPanel && converted && !trashed && !goneState;
   // Pendant la conversion, texte et destination sont figés : on convertit la version enregistrée.
   const editable = !trashed && !goneState && !converted && !converting;
   const titleEdited = conversion.open && conversion.edited;
@@ -279,6 +294,74 @@ export function CaptureDetail(props: CaptureDetailProps) {
     // Un titre de conversion encore non validé retient le départ : la bannière reste affichée.
     if (safe && !titleDraft()) finishLeave("saved");
     return safe;
+  }
+
+  // --- Remise dans la boîte (capture traitée) ---
+
+  function openReturnPanel() {
+    if (inFlight.current || model.current.baseline.convertedAt === null) return;
+    setError(null);
+    setNotice(null);
+    setReturnPanel(true);
+  }
+
+  function closeReturnPanel() {
+    setReturnPanel(false);
+    // Le panneau disparaît : le focus revient à la commande qui l'a ouvert.
+    window.setTimeout(() => returnButtonRef.current?.focus({ preventScroll: true }), 0);
+  }
+
+  async function confirmReturn() {
+    const version = model.current.baseline;
+    const taskId = version.convertedTaskId;
+    if (inFlight.current || version.convertedAt === null || taskId === null || model.current.gone) return;
+    inFlight.current = true;
+    setBusy("return");
+    setError(null);
+    setNotice(null);
+    try {
+      // Succès uniquement après la réponse de Rust (les protections y sont l'autorité finale).
+      const result = await track(cancelTaskConversion(taskId));
+      setBaseline(result.item);
+      setReturnPanel(false);
+      onReturned(result.item, mounted.current);
+    } catch (cause) {
+      await explainReturnFailure(cause);
+    } finally {
+      inFlight.current = false;
+      setBusy(null);
+    }
+  }
+
+  async function explainReturnFailure(cause: unknown) {
+    const code = cause instanceof InboxApiError ? cause.code : "unknown";
+    const message = cause instanceof Error ? cause.message : "La remise dans la boîte a échoué.";
+    if (code === "task_modified") {
+      // Travail déjà fait sur la tâche : rien n'est annulé, la capture reste dans « Traitées ».
+      setReturnPanel(false);
+      setNotice(
+        "Cette tâche a déjà été modifiée : la capture reste dans « Traitées ». " +
+          "Ouvrez la tâche pour la consulter.",
+      );
+    } else if (code === "task_not_active") {
+      await refreshBaseline();
+      setReturnPanel(false);
+      setNotice("Cette conversion a déjà été annulée : la capture est de retour dans « À organiser ».");
+      onStateChanged();
+    } else if (code === "task_not_found") {
+      await refreshBaseline();
+      setReturnPanel(false);
+      setError("Cette tâche n'existe plus. Les listes ont été relues.");
+      onStateChanged();
+    } else if (code === "not_found") {
+      setReturnPanel(false);
+      setGone(true);
+      setError("Cette capture n'existe plus.");
+      onStateChanged();
+    } else {
+      // inconsistent_state, storage, inconnu : l'état affiché ne change pas ; nouvel essai possible.
+      setError(`${message} La capture reste dans « Traitées » : vous pouvez réessayer.`);
+    }
   }
 
   async function explainSaveFailure(cause: unknown) {
@@ -502,6 +585,10 @@ export function CaptureDetail(props: CaptureDetailProps) {
     }
     panelWasOpen.current = conversion.open;
   }, [conversion.open, converted]);
+  // Confirmation de remise : le focus va au choix sûr (« Garder en Traitées »).
+  useEffect(() => {
+    if (returning) keepInTreatedRef.current?.focus();
+  }, [returning]);
   // La proposition arrivée (et non modifiée) est sélectionnée : une frappe la remplace.
   useEffect(() => {
     if (conversion.open && !suggesting && !conversion.edited) titleRef.current?.select();
@@ -531,7 +618,9 @@ export function CaptureDetail(props: CaptureDetailProps) {
       event.stopPropagation();
       if (model.current.leave) dismissLeave();
       else if (model.current.conversion.open) leaveConversionPanel();
-      else askLeave(onClose);
+      else if (returnPanelOpen.current) {
+        if (!inFlight.current) closeReturnPanel();
+      } else askLeave(onClose);
     }
   }
 
@@ -550,6 +639,16 @@ export function CaptureDetail(props: CaptureDetailProps) {
   }
 
   const message = error ?? notice;
+  // Fiche d'une capture traitée : le message (refus, conflit) est en haut, sous les commandes
+  // qui l'ont provoqué, jamais hors de la zone visible du panneau défilant.
+  const messageOnTop = converted && !trashed;
+  const messageNode = message ? (
+    <p id={errorId} className={error ? "detail__error" : "detail__notice"} role="alert">
+      {message}
+    </p>
+  ) : null;
+  const returnPanelOpen = useRef(false);
+  returnPanelOpen.current = returning;
   const destinationLabel =
     destinations.find((d) => d.id === destinationId)?.label ?? (destinationId === "" ? "Aucune" : destinationId);
   // Avertissement de départ : pendant le panneau le texte est figé, donc soit le texte (hors
@@ -558,7 +657,7 @@ export function CaptureDetail(props: CaptureDetailProps) {
 
   return (
     <section
-      className={converting ? "detail detail--converting" : "detail"}
+      className={converting || returning ? "detail detail--converting" : "detail"}
       aria-labelledby={headingId}
       onKeyDown={handleKeyDown}
     >
@@ -605,18 +704,68 @@ export function CaptureDetail(props: CaptureDetailProps) {
         </p>
       )}
 
-      {converted && !trashed && (
+      {message && messageOnTop && messageNode}
+
+      {converted && !trashed && !returning && (
         <div className="detail__banner">
           <p>
             Transformée en tâche le {formatLong(baseline.convertedAt!)}. Cette capture est conservée en
             lecture seule.
           </p>
-          {baseline.convertedTaskId && (
-            <button type="button" onClick={() => onOpenTask(baseline.convertedTaskId as string)}>
-              Voir la tâche
-            </button>
-          )}
+          <div className="detail__convert-actions">
+            {baseline.convertedTaskId && (
+              <button
+                type="button"
+                onClick={() => onOpenTask(baseline.convertedTaskId as string)}
+                disabled={busy !== null}
+              >
+                Voir la tâche
+              </button>
+            )}
+            {baseline.convertedTaskId && !returning && (
+              <button
+                type="button"
+                ref={returnButtonRef}
+                onClick={openReturnPanel}
+                disabled={busy !== null || goneState}
+              >
+                Remettre dans la boîte
+              </button>
+            )}
+          </div>
         </div>
+      )}
+
+      {returning && (
+        <section className="detail__convert" aria-labelledby={returnHeadingId}>
+          <h3 id={returnHeadingId} className="detail__convert-title">
+            Remettre dans la boîte
+          </h3>
+          <p className="detail__recap">
+            La tâche liée sera annulée mais conservée. La capture garde son texte, sa destination et ses
+            dates, et revient dans « À organiser » à sa place chronologique : si elle est ancienne,
+            « Voir tout » la retrouve.
+          </p>
+          <div className="detail__convert-actions">
+            <button
+              type="button"
+              className="detail__primary"
+              onClick={() => void confirmReturn()}
+              disabled={busy !== null}
+              aria-busy={busy === "return"}
+            >
+              {busy === "return" ? "Remise en cours…" : "Confirmer la remise"}
+            </button>
+            <button
+              type="button"
+              ref={keepInTreatedRef}
+              onClick={closeReturnPanel}
+              disabled={busy !== null}
+            >
+              Garder en Traitées
+            </button>
+          </div>
+        </section>
       )}
 
       {converting && (
@@ -713,11 +862,7 @@ export function CaptureDetail(props: CaptureDetailProps) {
         </dd>
       </dl>
 
-      {message && (
-        <p id={errorId} className={error ? "detail__error" : "detail__notice"} role="alert">
-          {message}
-        </p>
-      )}
+      {message && !messageOnTop && messageNode}
 
       <div className="detail__actions" hidden={converting || (converted && !trashed)}>
         {trashed ? (
