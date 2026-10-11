@@ -8,13 +8,15 @@ interface TaskDetailProps {
   task: Task;
   destinations: Destination[];
   onClose: () => void;
+  /** « Voir la capture » : ouvre la capture d'origine (relue dans Rust par le parent). */
+  onOpenOrigin?: (itemId: string) => void;
 }
 
 /**
  * Fiche d'une tâche, en **lecture seule** (002-B) : l'édition et les statuts avancés viennent
  * avec la brique 003. Remonter avec `key={task.id}` pour changer de tâche.
  */
-export function TaskDetail({ task, destinations, onClose }: TaskDetailProps) {
+export function TaskDetail({ task, destinations, onClose, onOpenOrigin }: TaskDetailProps) {
   const headingId = useId();
   const headingRef = useRef<HTMLHeadingElement>(null);
   // Date de la capture d'origine (lecture facultative : son absence ne gêne pas la fiche).
@@ -95,6 +97,14 @@ export function TaskDetail({ task, destinations, onClose }: TaskDetailProps) {
                 : `Issue de la capture du ${formatLong(originDate)}`}
         </dd>
       </dl>
+
+      {task.originInboxItemId !== null && onOpenOrigin && (
+        <div className="detail__actions">
+          <button type="button" onClick={() => onOpenOrigin(task.originInboxItemId as string)}>
+            Voir la capture
+          </button>
+        </div>
+      )}
     </section>
   );
 }

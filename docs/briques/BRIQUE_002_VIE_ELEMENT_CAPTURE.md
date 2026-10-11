@@ -1,7 +1,7 @@
 # Brique 002 — Vie d'un élément capturé : transformation d'une capture en tâche
 
 **Document de référence unique de la brique 002.**
-**État : 002-A validée et fusionnée dans `main` (PR #7) ; 002-B implémentée sur la branche `brique-002b-interface`, en attente de validation ; 002-C non commencée.**
+**État : 002-A (PR #7) et 002-B (PR #8) validées et fusionnées dans `main` ; 002-C implémentée sur la branche `brique-002c-traitees` (2026-10-11), en attente de validation.**
 **Dépendances :** brique 001 (A à E) validée et fusionnée dans `main`.
 **À lire avec :** `01_CAHIER_DES_CHARGES.md` (sections C et D), `03_ARCHITECTURE.md`, `04_SECURITE.md`, `05_ROADMAP.md`, `BRIQUE_001_CAPTURE_RAPIDE.md`.
 
@@ -30,8 +30,8 @@ Fiche, édition du texte et de la destination, brouillon protégé, verrou optim
 | Sous-brique | Contenu | État |
 |---|---|---|
 | **002-A** | Migration 0002, modèle minimal, commandes Rust, conversion et annulation atomiques, sauvegarde préalable aux migrations, tests | Validée et fusionnée (PR #7) |
-| **002-B** | « Transformer en tâche » dans la fiche (aperçu du titre, notification « Annuler »), première liste des tâches en lecture seule, liens « Tâches » dans l'en-tête de la boîte | À faire |
-| **002-C** | Vue « Traitées », provenance depuis la tâche, restauration contrôlée (« Remettre dans la boîte »), finitions | À faire |
+| **002-B** | « Transformer en tâche » dans la fiche (aperçu du titre, notification « Annuler »), première liste des tâches en lecture seule, liens « Tâches » dans l'en-tête de la boîte | Validée et fusionnée (PR #8) |
+| **002-C** | Vue « Traitées », provenance depuis la tâche, restauration contrôlée (« Remettre dans la boîte »), finitions | Implémentée, en attente de validation |
 
 002-A n'ajoute aucune interface ; 002-B ajoute la conversion et la liste des tâches (section 11). Hors périmètre de 002 : statuts avancés, terminer une tâche, sous-tâches, notes, projets, moteur d'initiation.
 
@@ -139,7 +139,7 @@ Le test `restauration_depuis_une_sauvegarde` exécute exactement ces étapes sur
 - Sauvegarde **utilisateur** (planifiée ou exportable) toujours à décider avant toute donnée réelle dans Stable (voir `09_DECISIONS_OUVERTES.md`).
 - Contrat pour 003 et suivantes : toute modification d'une tâche fait croître `updated_at` (imposé par le déclencheur) ; tout lien rattaché à une tâche (sous-tâche, note, relation) doit ajouter sa condition à la garde d'annulation.
 
-## 11. Réalisation 002-B : interface de conversion et liste des tâches (2026-10-11, en attente de validation)
+## 11. Réalisation 002-B : interface de conversion et liste des tâches (2026-10-11, validée et fusionnée : PR #8)
 
 ### Parcours
 1. **Fiche d'une capture :** bouton « Transformer en tâche » entre « Annuler les modifications » et « Mettre à la corbeille » (celle-ci reste isolée à droite). Absent pour une capture supprimée, supprimée ailleurs ou déjà convertie. Les actions de la fiche sont désormais **collantes** en bas du panneau : à 640 px de haut, elles ne sortent plus de la zone visible.
@@ -182,6 +182,59 @@ Test Rust `repetition_sur_copie_isolee`, `#[ignore]`, paramétré par `MORGANISE
 
 ### Limites
 - La conversion n'a pas été essayée dans l'application Windows avec la base Dev (interdit tant que la copie isolée n'a pas été répétée).
-- Pas de vue « Traitées » ni de « Remettre dans la boîte » depuis la liste (002-C) ; une capture convertie ouverte par une liste périmée est en lecture seule avec « Voir la tâche ».
+- « Traitées » et « Remettre dans la boîte » : livrés en 002-C (section 12).
 - Fiche de tâche en lecture seule ; aucune édition ni changement de statut (003).
 - À 360×480 la boîte reste très petite (limite préexistante, voir 001-E).
+
+## 12. Réalisation 002-C : captures traitées et traçabilité (2026-10-11, en attente de validation)
+
+Aucune nouvelle commande Rust, aucune migration : `list_converted_items`, `cancel_task_conversion`, `get_inbox_item` et `get_task` de 002-A suffisent. Seul un wrapper TypeScript (`listConvertedItems`) est ajouté.
+
+### « Traitées » = captures **actuellement** converties
+La vue liste les captures dont la conversion est **active**. Ce n'est **pas un historique** de toutes les conversions passées : une conversion annulée (par « Annuler » ou « Remettre dans la boîte ») fait sortir la capture de « Traitées » ; une reconversion l'y fait revenir une seule fois. Les tâches annulées restent conservées en base (`deleted_at`) mais n'ont pas de vue avant la brique 003.
+
+### Parcours
+1. **Accès :** lien « Traitées » dans l'en-tête de « À organiser », entre « Tâches » et « Corbeille ». La vue remplace la scène, la capture rapide reste visible, « ← Retour ».
+2. **Liste :** `PagedCaptureView` réutilisé (lots de 50, plus ancienne en haut, plus récente en bas, anciennes chargées au-dessus avec défilement conservé), classée par **date de conversion** (« Traitée le … »), destination conservée, pas de badge « Tâche ». État vide : « Aucune capture traitée pour le moment. Une capture transformée en tâche apparaît ici. »
+3. **Fiche de l'origine :** texte intégral, destination et dates d'origine, date de conversion, tout en lecture seule (aucun « Enregistrer », « Corbeille » ni « Transformer »). Commandes : « Voir la tâche » et « Remettre dans la boîte ».
+4. **Navigation tâche ↔ capture :** « Voir la tâche » (existant) ; « Voir la capture » ajouté dans la fiche de tâche quand l'origine existe. Une seule fiche à la fois ; l'objet est relu dans Rust ; les gardes de brouillon existantes s'appliquent (tout passe par `openItem` / `openTask`).
+5. **« Remettre dans la boîte » — uniquement dans la fiche de capture traitée** (ni sur les cartes de la liste, ni depuis la fiche de tâche) :
+   - une confirmation intégrée, non modale, remplace la bannière : « La tâche liée sera annulée mais conservée… » ; boutons « Confirmer la remise » et « Garder en Traitées » ; **le focus est sur « Garder en Traitées »** ; Échap ferme la confirmation (la fiche reste) et rend le focus à la commande ;
+   - `cancel_task_conversion(convertedTaskId)` n'est appelé qu'après confirmation, une seule fois (verrou `inFlight`), et le succès n'est affiché qu'après la réponse de Rust ;
+   - succès : la fiche se ferme **seulement si c'est toujours la fiche de cette capture**, la capture sort de « Traitées », la boîte et les tâches sont relues, message d'état d'une ligne « Capture remise dans « À organiser ». », **aucune animation d'arrivée, aucune notification « Annuler »**, focus sur la carte voisine, sinon sur le champ de capture ;
+   - la capture retrouve identité, texte, destination et `updatedAt` d'origine (garanti par Rust, vérifié par test) ; elle reprend sa place chronologique, donc peut ne pas figurer parmi les 20 de l'accueil : la confirmation l'indique et « Voir tout » la retrouve (testé avec 26 captures). `highlightId` (parcours pédagogique) n'est pas réutilisé.
+
+### Erreurs et concurrence
+| Situation | Comportement |
+|---|---|
+| `task_modified` | rien n'est annulé ; la capture reste dans « Traitées » ; message en haut de la fiche ; « Voir la tâche » disponible |
+| `task_not_active` | fiche relue (capture de nouveau active), message « déjà annulée », listes relues |
+| `task_not_found` | message d'erreur, fiche relue, listes relues |
+| `not_found` (capture) | message, fiche en lecture seule, listes relues |
+| `storage`, `inconsistent_state`, inconnu | état affiché inchangé, confirmation conservée, nouvel essai possible |
+| « Voir la tâche » sur tâche déjà annulée ailleurs | message, aucune fiche de tâche, listes relues |
+| « Voir la tâche » / « Voir la capture » : objet introuvable | message d'erreur, fiche courante conservée |
+| Réponse tardive | un compteur de navigation périme toute ouverture par identifiant dès qu'une autre ouverture, fermeture ou changement de vue a lieu ; la réponse tardive d'une remise ne ferme jamais une autre fiche |
+
+Les protections Rust restent l'autorité finale : l'interface ne contourne rien (le faux backend reproduit les mêmes règles).
+
+### Anomalies trouvées à la vérification et corrigées
+1. À 380 et 1000 px de large la confirmation, placée sous la bannière, sortait de la zone visible du panneau défilant, et le focus (sans défilement) y était invisible : la confirmation remplace maintenant la bannière, en haut, avec le même mode compact que le panneau de conversion.
+2. En fenêtre étroite, le focus était perdu après la remise (la carte voisine est masquée tant que la fiche est ouverte) : le focus est posé après le rendu qui réaffiche la liste.
+3. Le message d'état de deux lignes faisait remonter la capture rapide : message ramené à une ligne, détail déplacé dans la confirmation.
+4. Le message de refus (`task_modified`), en bas de la fiche, n'était pas visible sans défilement : il est affiché en haut pour une capture traitée.
+
+### Fichiers
+`src/features/inbox/` : `api.ts` (`listConvertedItems`), `InboxHome.tsx` (vue, navigation par identifiant protégée, `handleReturned`), `InboxPanel.tsx` (lien), `CaptureDetail.tsx` + `.css` (confirmation, erreurs), `TaskDetail.tsx` (« Voir la capture »), `InboxHome.treated.test.tsx` (nouveau) ; `src/test/fakeBackend.ts` (`list_converted_items`). Rust : aucun fichier modifié.
+
+### Tests
+- Interface : 247 réussis (216 existants + 31 nouveaux : liste, ordre par conversion, pagination, lecture seule, navigation dans les deux sens, réponses tardives, objets introuvables ou inactifs, confirmation et Échap, remise à l'identique, double validation, refus tâche modifiée, conversion déjà annulée, erreurs et nouvel essai, fenêtre compacte, non-régression).
+- Les tests de réponses tardives ont été validés par mutation (suppression du contrôle de péremption : 3 échecs).
+- Revue avant publication : tri et curseur de « Traitées » vérifiés sur la date de **conversion** (55 captures converties dans l'ordre inverse de leur création, dates d'origine inchangées) ; la remise d'une capture ne retire plus la notification « Annuler » d'une autre capture (correctif ciblé, test validé par mutation).
+- Vérification visuelle Edge sur base fictive (380, 700, 1000 px ; mouvement réduit) : liste, fiche, confirmation, Échap, navigation, remise, refus ; aucun défilement horizontal, boutons visibles, capture rapide immobile, aucune notification.
+
+### Limites
+- Pas de vue de récupération des tâches annulées (brique 003).
+- Pas d'édition ni de statut de tâche (003) : une tâche modifiée ne peut plus être annulée, donc sa capture reste dans « Traitées » sans moyen de la remettre dans la boîte avant 003.
+- En fenêtre de 380 px, les trois liens de l'en-tête passent sur deux lignes (« Corbeille » seule sur la seconde).
+- Essai Windows réel avec la base Dev : toujours interdit tant que la répétition de migration sur copie isolée n'a pas été autorisée et exécutée.

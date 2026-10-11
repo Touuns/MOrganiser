@@ -2,7 +2,9 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import {
   cancelTaskConversion,
   createInboxItem,
+  getInboxItem,
   getTask,
+  listConvertedItems,
   listDestinations,
   listInboxItems,
   listTasks,
@@ -32,7 +34,7 @@ import "./InboxHome.css";
 /** Nombre de captures affichées sur l'accueil (les plus récentes). */
 export const HOME_LIMIT = 20;
 
-type View = "home" | "all" | "trash" | "tasks";
+type View = "home" | "all" | "trash" | "tasks" | "converted";
 type Status = { kind: "ok" | "error"; text: string } | null;
 
 /** Une demande de fermeture de la fenêtre : annulable, et réexaminée à chaque étape. */
@@ -81,6 +83,9 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
   // Identité des notifications : compteur monotone (deux événements dans la même milliseconde
   // ne partagent jamais la clé, donc la minuterie de 4 s repart toujours).
   const toastSequence = useRef(0);
+  // Identité de la dernière navigation par identifiant (« Voir la tâche », « Voir la capture ») :
+  // toute autre ouverture ou fermeture la périme, et sa réponse tardive est alors ignorée.
+  const navRequest = useRef(0);
   const detailRef = useRef<CaptureDetailHandle>(null);
   const formRef = useRef<CaptureFormHandle>(null);
   const panelRef = useRef<InboxPanelHandle>(null);
@@ -292,6 +297,7 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
   }
 
   function openItem(item: InboxItem) {
+    navRequest.current += 1;
     if (selected?.id === item.id) return;
     const active = document.activeElement;
     guard(() => {
@@ -302,6 +308,7 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
   }
 
   function openTask(task: Task) {
+    navRequest.current += 1;
     if (selectedTask?.id === task.id) return;
     const active = document.activeElement;
     // La fiche d'une capture (et son brouillon, titre de conversion compris) est protégée.
@@ -312,17 +319,52 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
     });
   }
 
-  /** « Voir la tâche » depuis une capture déjà convertie. */
+  /**
+   * « Voir la tâche » depuis une capture convertie. L'objet est relu dans Rust ; une réponse
+   * tardive (autre ouverture ou fermeture entre-temps) n'ouvre jamais une fiche périmée.
+   */
   async function openTaskById(taskId: string) {
+    const request = ++navRequest.current;
     try {
-      openTask(await getTask(taskId));
+      const task = await getTask(taskId);
+      if (request !== navRequest.current) return;
+      if (task.deletedAt !== null) {
+        // Conversion annulée ailleurs : la capture est de retour dans la boîte.
+        setStatus({
+          kind: "ok",
+          text: "Cette tâche a été annulée : la capture est de retour dans « À organiser ».",
+        });
+        if (selectedRef.current) refreshOpenSheet(selectedRef.current.id);
+        changed();
+        return;
+      }
+      openTask(task);
     } catch (error) {
+      if (request !== navRequest.current) return;
       const message = error instanceof Error ? error.message : "La tâche n'a pas pu être ouverte.";
       setStatus({ kind: "error", text: message });
+      if (selectedRef.current) refreshOpenSheet(selectedRef.current.id);
+      changed();
+    }
+  }
+
+  /** « Voir la capture » depuis une tâche : même protection contre les réponses tardives. */
+  async function openOriginById(itemId: string) {
+    const request = ++navRequest.current;
+    try {
+      const origin = await getInboxItem(itemId);
+      if (request !== navRequest.current) return;
+      openItem(origin);
+    } catch (error) {
+      if (request !== navRequest.current) return;
+      const message = error instanceof Error ? error.message : "La capture n'a pas pu être ouverte.";
+      setStatus({ kind: "error", text: message });
+      changed();
     }
   }
 
   function closeTask() {
+    navRequest.current += 1;
     setSelectedTask(null);
     const target = opener.current;
     opener.current = null;
@@ -332,6 +374,7 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
   }
 
   function closeDetail() {
+    navRequest.current += 1;
     setSelected(null);
     const target = opener.current;
     opener.current = null;
@@ -344,6 +387,7 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
   function changeView(next: View) {
     if (next === view) return;
     guard(() => {
+      navRequest.current += 1;
       cancelDeparture();
       setView(next);
     });
@@ -388,6 +432,41 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
     setDeparture({ id: item.id, moveFocus: closing });
     setToast({ id: ++toastSequence.current, kind: "convert", itemId: item.id, taskId: task.id });
     setStatus(null);
+    changed();
+  }
+
+  /**
+   * La capture est de retour dans la boîte, confirmé par Rust. Sa fiche ne se ferme que si c'est
+   * toujours SA fiche qui est ouverte (jamais une autre à cause d'une réponse tardive) ; le focus
+   * va à une carte voisine, sinon au champ de capture. Ni animation d'arrivée ni notification.
+   */
+  function handleReturned(item: InboxItem, closeSheet: boolean) {
+    const closing = closeSheet && selectedRef.current?.id === item.id;
+    if (closing) {
+      const card = [...document.querySelectorAll<HTMLElement>(".inbox-home__main [data-capture-id]")].find(
+        (element) => element.dataset.captureId === item.id,
+      );
+      const neighbour = card?.nextElementSibling ?? card?.previousElementSibling;
+      const neighbourId = (neighbour as HTMLElement | null | undefined)?.dataset.captureId ?? null;
+      opener.current = null; // la carte d'origine disparaît de « Traitées »
+      closeDetail();
+      // En fenêtre étroite la liste est masquée tant que la fiche est ouverte : le focus est
+      // posé après le rendu qui la réaffiche, sur la carte voisine, sinon sur le champ de capture.
+      window.setTimeout(() => {
+        const target =
+          neighbourId === null
+            ? null
+            : [...document.querySelectorAll<HTMLElement>(".inbox-home__main [data-capture-id]")]
+                .find((element) => element.dataset.captureId === neighbourId)
+                ?.querySelector<HTMLElement>(".inbox__open");
+        if (target) target.focus({ preventScroll: true });
+        else formRef.current?.focus();
+      }, 0);
+    } else refreshOpenSheet(item.id);
+    // Seule la notification de CETTE capture devient sans objet ; celle d'une autre reste.
+    setToast((current) => (current && current.itemId === item.id ? null : current));
+    // Une seule ligne (la zone d'état ne grandit pas) ; la fiche a déjà précisé le détail.
+    setStatus({ kind: "ok", text: "Capture remise dans « À organiser »." });
     changed();
   }
 
@@ -436,6 +515,7 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
   const loadAll = useCallback((before: Cursor | null) => listInboxItems(filter, PAGE_SIZE, before), [filter]);
   const loadTrash = useCallback((before: Cursor | null) => listTrashedItems(PAGE_SIZE, before), []);
   const loadTasks = useCallback((before: Cursor | null) => listTasks(PAGE_SIZE, before), []);
+  const loadConverted = useCallback((before: Cursor | null) => listConvertedItems(PAGE_SIZE, before), []);
 
   return (
     <div
@@ -488,6 +568,7 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
             onShowAll={() => changeView("all")}
             onShowTrash={() => changeView("trash")}
             onShowTasks={() => changeView("tasks")}
+            onShowConverted={() => changeView("converted")}
             highlightId={initiationStep === "box" ? createdId : null}
           />
         )}
@@ -525,6 +606,20 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
                 onOpen={openTask}
               />
             )}
+          />
+        )}
+        {view === "converted" && (
+          <PagedCaptureView
+            title="Traitées"
+            onBack={() => changeView("home")}
+            loader={loadConverted}
+            reloadKey={version}
+            destinations={destinations}
+            selectedId={selected?.id ?? null}
+            onOpen={openItem}
+            emptyText="Aucune capture traitée pour le moment. Une capture transformée en tâche apparaît ici."
+            dateOf={(item) => item.convertedAt ?? item.createdAt}
+            datePrefix="Traitée le "
           />
         )}
         {view === "trash" && (
@@ -594,6 +689,8 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
               }}
               onConverted={handleConverted}
               onOpenTask={(taskId) => void openTaskById(taskId)}
+              onReturned={handleReturned}
+              onStateChanged={changed}
             />
           </div>
         )}
@@ -604,6 +701,7 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
               task={selectedTask}
               destinations={destinations}
               onClose={closeTask}
+              onOpenOrigin={(itemId) => void openOriginById(itemId)}
             />
           </div>
         )}

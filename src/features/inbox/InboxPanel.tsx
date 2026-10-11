@@ -37,6 +37,7 @@ interface InboxPanelProps {
   onShowAll: () => void;
   onShowTrash: () => void;
   onShowTasks: () => void;
+  onShowConverted: () => void;
   /** Capture à mettre en évidence pendant la visite d'initiation. */
   highlightId?: string | null;
 }
@@ -174,6 +175,9 @@ export function InboxPanel(props: InboxPanelProps) {
           <FilterSelect destinations={destinations} filter={filter} onChange={onFilterChange} />
           <button type="button" className="inbox__link" onClick={props.onShowTasks}>
             Tâches
+          </button>
+          <button type="button" className="inbox__link" onClick={props.onShowConverted}>
+            Traitées
           </button>
           <button type="button" className="inbox__link" onClick={props.onShowTrash}>
             Corbeille

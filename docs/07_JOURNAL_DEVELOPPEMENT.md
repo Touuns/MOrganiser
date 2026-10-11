@@ -349,8 +349,23 @@
 - **Vérification visuelle (Edge, base fictive en mémoire, 1000/700/380 px) :** ouverture du panneau, avertissement de titre, conversion, annulation, reconversion, liste, fiche de tâche ; position de la capture rapide inchangée à 1000 px ; aucun défilement horizontal ; notification sans recouvrement du champ ; mouvement réduit (carte retirée immédiatement).
 - **Données :** aucune base Dev ni Stable réelle ouverte, lue, copiée ni migrée ; application Windows non lancée.
 - **Limites :** voir fiche 002, section 11.
-- **Validation du propriétaire :** en attente.
+- **Validation du propriétaire :** validée et fusionnée (PR #8, `1c0cda5`) après deux correctifs de revue (focus du titre après « Continuer » ; identités de notification monotones).
 - **Prochaine étape :** essai de migration sur copie isolée (autorisation distincte), puis 002-C.
+
+## 2026-10-11 — Brique 002-C : captures traitées et traçabilité
+
+- **Objectif :** terminer le parcours d'une capture transformée en tâche : vue « Traitées », consultation de l'origine, navigation tâche ↔ capture, « Remettre dans la boîte » contrôlé, gestion des conflits. Ni édition ni statuts (003), ni suppression définitive.
+- **Décisions du propriétaire (2026-10-11) :** lien « Traitées » à côté de « Tâches » et « Corbeille » ; « Traitées » = captures **actuellement** converties (pas un historique) ; remise **uniquement dans la fiche de capture**, après confirmation intégrée (focus sur « Garder en Traitées », Échap) ; ni animation d'arrivée, ni notification « Annuler », ni `highlightId` ; aucune nouvelle commande Rust ni migration.
+- **Fichiers :** voir fiche 002, section 12. Rust : aucun fichier modifié.
+- **Fonctionnement expliqué simplement :** « Traitées » montre les captures dont la tâche existe encore. Depuis une capture on ouvre sa tâche et inversement. « Remettre dans la boîte » annule la tâche (conservée) et rend la capture, mais seulement si la tâche n'a pas été touchée : Rust refuse sinon et l'interface n'insiste jamais. Une réponse arrivée trop tard n'ouvre ni ne ferme jamais la mauvaise fiche.
+- **Anomalies trouvées à la vérification visuelle et corrigées :** confirmation hors de la zone visible à 380 et 1000 px ; focus perdu en fenêtre étroite après la remise ; message d'état sur deux lignes qui déplaçait la capture rapide ; message de refus invisible sans défilement.
+- **Revue avant publication :** une remise effaçait aussi la notification « Annuler » d'une autre capture ; elle ne retire plus que celle de la capture concernée. +2 tests (tri et curseur par date de conversion, notification d'une autre capture).
+- **Tests :** interface 247/247 (+31) ; `pnpm typecheck` OK ; réponses tardives validées par mutation ; Rust non touché (121 réussis + 2 ignorés à la livraison 002-B).
+- **Vérification visuelle (Edge, base fictive en mémoire, 380/700/1000 px, mouvement réduit) :** liste, fiche, confirmation, Échap, navigation, remise, refus ; aucun défilement horizontal ; capture rapide immobile ; aucune notification.
+- **Données :** aucune base Dev ni Stable réelle ouverte, lue, copiée ni migrée ; application Windows non lancée ; répétition de migration non exécutée.
+- **Limites :** voir fiche 002, section 12.
+- **Documentation corrigée :** statuts de 002-A (PR #7) et 002-B (PR #8) dans la fiche 002, la roadmap et le journal. **Reste périmé, hors périmètre :** la ligne « État » de `BRIQUE_000_FONDATIONS.md` (« en attente de validation du propriétaire »).
+- **Validation du propriétaire :** en attente.
 
 ## Modèle à recopier après chaque brique
 

@@ -76,15 +76,26 @@ export function createFakeBackend() {
   }
 
   function page(
-    trash: boolean,
+    scope: "active" | "trash" | "converted",
     filter: InboxFilter,
     limit: number,
     before: Cursor | null,
   ): InboxPage {
-    const key = (item: InboxItem) => (trash ? (item.deletedAt as number) : item.createdAt);
+    const key = (item: InboxItem) =>
+      scope === "trash"
+        ? (item.deletedAt as number)
+        : scope === "converted"
+          ? (item.convertedAt as number)
+          : item.createdAt;
     const scoped = state.items
-      // Boîte : ni supprimées ni converties ; corbeille : supprimées.
-      .filter((item) => (trash ? item.deletedAt !== null : item.deletedAt === null && item.convertedAt === null))
+      // Boîte : ni supprimées ni converties ; corbeille : supprimées ; Traitées : converties.
+      .filter((item) =>
+        scope === "trash"
+          ? item.deletedAt !== null
+          : scope === "converted"
+            ? item.deletedAt === null && item.convertedAt !== null
+            : item.deletedAt === null && item.convertedAt === null,
+      )
       .filter((item) => matches(item, filter))
       .sort((a, b) => key(b) - key(a) || (a.id < b.id ? 1 : -1));
     const older = before
@@ -184,11 +195,15 @@ export function createFakeBackend() {
         return Promise.resolve(DESTINATIONS);
       case "list_inbox_items":
         return Promise.resolve(
-          page(false, args.filter as InboxFilter, args.limit as number, (args.before as Cursor) ?? null),
+          page("active", args.filter as InboxFilter, args.limit as number, (args.before as Cursor) ?? null),
         );
       case "list_trashed_items":
         return Promise.resolve(
-          page(true, { type: "all" }, args.limit as number, (args.before as Cursor) ?? null),
+          page("trash", { type: "all" }, args.limit as number, (args.before as Cursor) ?? null),
+        );
+      case "list_converted_items":
+        return Promise.resolve(
+          page("converted", { type: "all" }, args.limit as number, (args.before as Cursor) ?? null),
         );
       case "get_inbox_item": {
         const item = find(args.id as string);
