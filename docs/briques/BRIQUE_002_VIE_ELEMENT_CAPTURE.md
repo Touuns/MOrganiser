@@ -178,7 +178,7 @@ Verrou `inFlight` partagé avec l'enregistrement et la corbeille ; opération d�
 - Vérification visuelle Edge sur base fictive (1000, 700 et 380 px) : panneau, avertissement, conversion, annulation, liste, fiche ; aucun défilement horizontal, boutons visibles, notification sans recouvrement du champ, mouvement réduit.
 
 ### Répétition de migration sur copie isolée (préparée, non exécutée sur des données personnelles)
-Test Rust `repetition_sur_copie_isolee`, `#[ignore]`, paramétré par `MORGANISER_REHEARSAL_DB` : refuse tout chemin sous `%LOCALAPPDATA%` / `%APPDATA%` ou dans un dossier `com.morganiser*` ; **n'ouvre jamais** le fichier fourni (travaille sur une copie temporaire) ; migre avec sauvegarde, compare tables et empreintes, joue conversion/annulation/reconversion, restaure depuis la sauvegarde ; vérifie que les fichiers source n'ont pas changé ; n'affiche que des comptes et des empreintes. Le dispositif lui-même est testé sur une base fictive.
+Test Rust `repetition_sur_copie_isolee`, `#[ignore]`, paramétré par `MORGANISER_REHEARSAL_DB` : refuse tout chemin sous `%LOCALAPPDATA%` / `%APPDATA%` ou dans un dossier `com.morganiser*` ; **n'ouvre jamais** le fichier fourni (travaille sur une copie temporaire) ; migre avec sauvegarde, compare tables et empreintes, joue conversion/annulation/reconversion, restaure depuis la sauvegarde ; vérifie que les fichiers source n'ont pas changé ; n'affiche que des comptes et des empreintes. Le dispositif lui-même est testé sur une base fictive. *(Garde-fous durcis et procédure corrigée : section 13.)*
 
 ### Limites
 - La conversion n'a pas été essayée dans l'application Windows avec la base Dev (interdit tant que la copie isolée n'a pas été répétée).
@@ -238,3 +238,288 @@ Les protections Rust restent l'autorité finale : l'interface ne contourne rien 
 - Pas d'édition ni de statut de tâche (003) : une tâche modifiée ne peut plus être annulée, donc sa capture reste dans « Traitées » sans moyen de la remettre dans la boîte avant 003.
 - En fenêtre de 380 px, les trois liens de l'en-tête passent sur deux lignes (« Corbeille » seule sur la seconde).
 - Essai Windows réel avec la base Dev : toujours interdit tant que la répétition de migration sur copie isolée n'a pas été autorisée et exécutée.
+
+## 13. Répétition de migration : garde-fous renforcés et procédure (2026-10-12, en attente de validation)
+
+Branche `chore/rehearsal-safety`. Seul le dispositif de test (`storage/rehearsal_tests.rs`) est modifié, plus la dépendance de test `sha2` (déjà présente dans le graphe via Tauri : aucune nouvelle crate, rien dans l'exécutable livré). Aucun code de production, aucune migration, `environment.rs` et `backup.rs` inchangés.
+
+### Garde-fous
+| Garde-fou | Comportement |
+|---|---|
+| Variable `MORGANISER_REHEARSAL_DB` | absente, vide ou composée d'espaces : **échec explicite** (avant : réussite trompeuse) |
+| Chemin | absolu, sans `..`, nommé `morganiser.db`, fichier ordinaire non lien |
+| Zones protégées | `%LOCALAPPDATA%`, `%APPDATA%`, dossiers de données Dev et Stable (calculés avec `environment::data_dir`), composant `com.morganiser*` (préfixe tiré de `STABLE_IDENTIFIER`) |
+| Chemin saisi ET canonique | les deux sont contrôlés ; comparaison par composants, insensible à la casse, préfixe `\\?\` retiré |
+| Liens, jonctions, noms 8.3 | refus de tout chemin dont la forme canonique diffère de la forme saisie ; un lien vers une zone protégée est refusé comme tel |
+| Zone protégée non résolue | la vérification **échoue** (refus par sécurité) ; variables `LOCALAPPDATA` / `APPDATA` absentes : échec |
+| `-wal` et `-shm` | s'ils existent : ni lien, ni dossier, même dossier réel, hors zones protégées ; absents : normal |
+| Avant validation | aucun fichier créé, aucune base ouverte (testé) |
+| Source | jamais ouverte par SQLite ; lecture binaire seule (copie et SHA-256) |
+| SHA-256 des fichiers source | présence, taille, date, empreinte de `.db`, `-wal`, `-shm` : avant la copie, après la copie, après l'opération, **même en cas d'erreur** ; la copie temporaire est comparée à la source avant toute ouverture SQLite |
+| Rapport du test | ni texte, ni chemin, ni empreinte ; une **ligne-marqueur à vocabulaire fixe** (`REHEARSAL-RESULT status=… from=… to=… integrity=… backup=… roundtrip=… restore=… source=…`) dont chaque `OK` correspond à une étape réellement vérifiée ; les messages de refus ne contiennent jamais de chemin personnel |
+
+Les empreintes SHA-256 de **fichiers** (contrôle de la source et de la copie) sont distinctes des empreintes **logiques** FNV des lignes SQLite (comparaison avant/après migration), qui ne sont plus affichées.
+
+### Nettoyage du dossier de travail (limites réelles)
+Le dossier de travail est préfixé `morganiser-rehearsal-` dans `%TEMP%`.
+- **Réussite** et **erreur normale** : supprimé (testé ; les connexions SQLite sont fermées avant la suppression).
+- **Panique** : supprimé (le déroulement exécute `Drop` ; testé).
+- **Arrêt brutal** (`taskkill /F`, fermeture du terminal, coupure de courant) : **aucun nettoyage** ; le dossier et les données copiées restent. Démontré par un test avec sous-processus tué.
+- **Suppression partielle** : `TempDir` ignore les erreurs (fichier tenu par un antivirus, un indexeur) ; un reliquat est possible même après une réussite.
+- **Recommandation** : lister puis supprimer seulement `morganiser-rehearsal-*`, avec confirmation dossier par dossier, jamais `%TEMP%` en bloc (étape 8 ci-dessous).
+
+### Tests ajoutés (bases fictives, dossiers temporaires)
+Variable absente, vide, espaces ; chemin relatif, `..`, mauvais nom, inexistant (rien n'est créé) ; zones protégées (dossiers Dev et Stable fictifs, `com.morganiser*`, casse, préfixe verbatim) ; zone protégée non résolue ; absence de chemin personnel dans les refus ; jonction vers une zone protégée (chemin canonique) et vers un dossier ordinaire (redirection) ; lien symbolique (si le privilège existe) ; `-wal` absent, présent, dossier ; SHA-256 de référence ; changement de contenu à taille identique ; changement avec **date restaurée** ; échec de copie ; source modifiée pendant la copie ; copie infidèle ; source illisible ; source inchangée après réussite et après échec ; nettoyage après réussite, erreur, panique et arrêt brutal.
+
+### Procédure PowerShell en deux phases indépendantes (à exécuter par le propriétaire)
+Fichiers à coller : le **bloc commun** en tête de chaque phase. La phase B **ne démarre jamais** à la fin de la phase A : elle exige une nouvelle autorisation, une copie déjà validée et la confirmation `EXECUTER`.
+
+Principes :
+- **Aucune sortie brute n'est republiée.** Le rapport est un tableau synthétique construit à partir de résultats vérifiés (code de sortie, nombre de tests, ligne `test result`, ligne-marqueur). La sortie complète de `cargo` est écrite dans un **journal local** (`journal-phaseB-….log`, dans le dossier d'essais), jamais affichée.
+- **Une réussite trompeuse est impossible :** code de sortie 0 **et** exactement un test exécuté **et** `1 passed; 0 failed; 0 ignored` **et** marqueur `status=OK` valide. Zéro test exécuté = échec.
+- **Messages fixes** : les arrêts contrôlés affichent des phrases sans chemin ; toute autre erreur affiche seulement qu'une vérification manuelle des journaux locaux est nécessaire.
+- **Aucune suppression automatique.** La copie de référence n'est jamais supprimée ; les dossiers `morganiser-rehearsal-*` restants sont listés puis supprimés un par un, sur confirmation `oui`, jamais `%TEMP%` en bloc.
+
+#### Bloc commun
+```powershell
+# ===== BLOC COMMUN (identique en tête des phases A et B) ============================
+$ErrorActionPreference = 'Stop'
+$AppDataDir = Join-Path $env:LOCALAPPDATA 'com.morganiser.desktop.dev\data'   # Dev UNIQUEMENT
+$Root       = 'C:\MOrganiserEssais'                   # dossier local NON synchronisé
+$RepoTauri  = 'I:\ProjetDEv\Morganiser\src-tauri'
+$Names      = @('morganiser.db', 'morganiser.db-wal', 'morganiser.db-shm')
+
+function Fail([string]$Message) { throw ('CTRL:' + $Message) }   # messages fixes, sans chemin
+
+function Get-Snapshot([string]$Dir) {             # présence + SHA-256 de chaque fichier
+    $h = @{}
+    foreach ($n in $Names) {
+        $p = Join-Path $Dir $n
+        if (Test-Path -LiteralPath $p) { $h[$n] = (Get-FileHash -LiteralPath $p -Algorithm SHA256).Hash } else { $h[$n] = $null }
+    }
+    return $h
+}
+function Test-SameSnapshot($A, $B) {              # même présence, mêmes empreintes, fichier par fichier
+    foreach ($n in $Names) { if ($A[$n] -ne $B[$n]) { return $false } }
+    return $true
+}
+function Test-FileFree([string]$Path) {           # lecture exclusive : échoue si un processus tient le fichier
+    try { $s = [IO.File]::Open($Path, 'Open', 'Read', 'None'); $s.Close(); return $true } catch { return $false }
+}
+function Assert-SafeFolder([string]$Path) {       # hors zones protégées et synchronisées, sans jonction ni lien
+    $full = [IO.Path]::GetFullPath($Path)
+    foreach ($zone in @($env:LOCALAPPDATA, $env:APPDATA, $env:OneDrive, $env:OneDriveConsumer, $env:OneDriveCommercial)) {
+        if ($zone -and $full.StartsWith($zone, [StringComparison]::OrdinalIgnoreCase)) { Fail 'Dossier interdit (zone protégée ou synchronisée).' }
+    }
+    if ($full -match 'OneDrive|Dropbox|Google Drive|iCloud|com\.morganiser') { Fail 'Dossier interdit (synchronisé ou données de l''application).' }
+    $probe = $full
+    while ($probe) {
+        if (Test-Path -LiteralPath $probe) {
+            if ((Get-Item -LiteralPath $probe -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) { Fail 'Le chemin contient une jonction ou un lien.' }
+        }
+        $parent = Split-Path -Parent $probe
+        if (-not $parent -or $parent -eq $probe) { break }
+        $probe = $parent
+    }
+}
+function Assert-AppStopped {                      # « Quitter » depuis la zone de notification ; le × ne fait que masquer
+    if (Get-Process -Name 'morganiser-dev' -ErrorAction SilentlyContinue) { Fail 'M''Organiser Dev tourne encore : quittez-le puis relancez.' }
+    $held = @(Get-Process | Where-Object { try { $_.Path -like '*morganiser-dev*' } catch { $false } })
+    if ($held.Count -gt 0) { Fail 'Un processus morganiser-dev subsiste.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $AppDataDir 'morganiser.db'))) { Fail 'morganiser.db introuvable dans les données Dev.' }
+    foreach ($n in $Names) {
+        $p = Join-Path $AppDataDir $n
+        if ((Test-Path -LiteralPath $p) -and -not (Test-FileFree $p)) { Fail "$n est tenu par un processus : application non complètement arrêtée." }
+    }
+}
+function Write-Failure($ErrorRecord, [string]$Log) {   # le détail brut va au journal LOCAL, jamais à l'écran
+    $message = [string]$ErrorRecord.Exception.Message
+    if ($Log) { try { ($ErrorRecord | Out-String) | Add-Content -LiteralPath $Log -Encoding UTF8 } catch { } }
+    if ($message.StartsWith('CTRL:')) { Write-Host ('ÉCHEC : ' + $message.Substring(5)) }
+    else { Write-Host 'ÉCHEC inattendu : vérification manuelle des journaux locaux nécessaire.' }
+}
+function Write-Report($Report) {
+    foreach ($entry in $Report.GetEnumerator()) { Write-Host ('{0,-36}: {1}' -f $entry.Key, $entry.Value) }
+}
+# ===== FIN DU BLOC COMMUN ============================================================
+```
+
+#### Phase A — création et vérification de la copie Dev
+Vérifie l'arrêt de l'application, contrôle les dossiers, calcule les empreintes, copie `.db`, `-wal`, `-shm`, compare nom par nom et empreinte par empreinte, écrit un **manifeste** (hors de la copie), met la copie en lecture seule, puis **s'arrête**. En cas de différence, la copie est conservée comme INVALIDE et aucun manifeste n'est écrit (la phase B la refusera).
+
+```powershell
+# ===== PHASE A — Création et vérification de la copie Dev ===========================
+# S'arrête à la fin. La phase B exige une NOUVELLE autorisation et ne démarre jamais seule.
+$Stamp    = Get-Date -Format 'yyyyMMdd-HHmmss'
+$Dest     = Join-Path $Root ("dev-$Stamp")
+$Manifest = "$Dest.manifest.json"
+$Log      = Join-Path $Root ("journal-phaseA-$Stamp.log")
+$Report   = [ordered]@{
+    'Application Dev arrêtée'            = 'ÉCHEC'
+    'Copie fidèle (.db, -wal, -shm)'     = 'ÉCHEC'
+    'Source Dev inchangée'               = 'ÉCHEC'
+    'Manifeste des empreintes écrit'     = 'ÉCHEC'
+}
+try {
+    Assert-SafeFolder $Root
+    if (-not (Test-Path -LiteralPath $Root)) { New-Item -ItemType Directory -Path $Root | Out-Null }
+    Assert-SafeFolder $Root
+    if (Test-Path -LiteralPath $Dest) { Fail 'La destination existe déjà.' }
+
+    Assert-AppStopped
+    $Report['Application Dev arrêtée'] = 'OK'
+
+    $S0 = Get-Snapshot $AppDataDir                       # référence : nom, présence, SHA-256
+    New-Item -ItemType Directory -Path $Dest | Out-Null
+    foreach ($n in $Names) {
+        if ($S0[$n]) { Copy-Item -LiteralPath (Join-Path $AppDataDir $n) -Destination (Join-Path $Dest $n) }
+    }
+    $S1 = Get-Snapshot $Dest                             # la copie est-elle identique ?
+    $S2 = Get-Snapshot $AppDataDir                       # la source a-t-elle changé pendant la copie ?
+    $Report['Copie fidèle (.db, -wal, -shm)'] = if (Test-SameSnapshot $S0 $S1) { 'OK' } else { 'DIFFÉRENT' }
+    $Report['Source Dev inchangée']           = if (Test-SameSnapshot $S0 $S2) { 'OK' } else { 'DIFFÉRENT' }
+    if ($Report['Source Dev inchangée'] -ne 'OK')           { Fail 'Source modifiée pendant la copie : copie INVALIDE, conservée pour examen, ne pas l''utiliser.' }
+    if ($Report['Copie fidèle (.db, -wal, -shm)'] -ne 'OK') { Fail 'Copie différente de la source : copie INVALIDE, conservée pour examen, ne pas l''utiliser.' }
+
+    $files = [ordered]@{}
+    foreach ($n in $Names) { $files[$n] = $S0[$n] }
+    (@{ schema = 1; files = $files } | ConvertTo-Json) | Set-Content -LiteralPath $Manifest -Encoding UTF8
+    foreach ($n in $Names) {
+        if ($S0[$n]) { (Get-Item -LiteralPath (Join-Path $Dest $n)).IsReadOnly = $true }
+    }
+    $Report['Manifeste des empreintes écrit'] = 'OK'
+}
+catch { Write-Failure $_ $Log }
+finally {
+    Write-Host ''
+    Write-Host '===== RAPPORT SYNTHÉTIQUE (phase A) ====='
+    Write-Report $Report
+    $allOk = -not ($Report.Values -contains 'ÉCHEC' -or $Report.Values -contains 'DIFFÉRENT')
+    if ($allOk) {
+        Write-Host ('Dossier de copie validé           : ' + (Split-Path -Leaf $Dest))
+        Write-Host 'PHASE A TERMINÉE. Ne lancez PAS la phase B sans nouvelle autorisation.'
+    } else {
+        Write-Host 'PHASE A EN ÉCHEC : aucune répétition possible. Rien n''a été supprimé ni exécuté.'
+    }
+}
+```
+
+#### Phase B — répétition de migration (nouvelle autorisation requise)
+Reprend le dossier validé par la phase A, **revérifie ses empreintes** contre le manifeste, revérifie l'arrêt de l'application, n'exécute que le test exact, contrôle le résultat et l'absence de modification de la source Dev et de la copie, puis affiche le rapport synthétique.
+
+```powershell
+# ===== PHASE B — Répétition de migration sur une copie DÉJÀ validée par la phase A ===
+$DestLeaf = ''          # À RENSEIGNER : nom du dossier validé par la phase A, ex. dev-20261012-101500
+$Stamp    = Get-Date -Format 'yyyyMMdd-HHmmss'
+$Log      = Join-Path $Root ("journal-phaseB-$Stamp.log")
+$Report   = [ordered]@{
+    'Tests réellement exécutés'          = 'inconnu'
+    'Répétition'                         = 'ÉCHEC'
+    'Version'                            = 'non vérifiée'
+    'Intégrité'                          = 'ÉCHEC'
+    'Sauvegarde et restauration'         = 'ÉCHEC'
+    'Source Dev inchangée'               = 'ÉCHEC'
+    'Copie de référence inchangée'       = 'ÉCHEC'
+}
+$Verdict = 'ÉCHEC'
+$Started = $false
+try {
+    # --- Reprise d'une copie validée, empreintes de référence revérifiées ---------
+    if (-not $DestLeaf) { Fail 'Renseignez $DestLeaf avec le dossier validé par la phase A.' }
+    if ($DestLeaf -notmatch '^dev-\d{8}-\d{6}$') { Fail 'Nom de dossier de copie invalide.' }
+    $Dest     = Join-Path $Root $DestLeaf
+    $Manifest = "$Dest.manifest.json"
+    Assert-SafeFolder $Root
+    Assert-SafeFolder $Dest
+    if (-not (Test-Path -LiteralPath $Manifest)) { Fail 'Manifeste de la phase A introuvable : refaites la phase A.' }
+    if (-not (Test-Path -LiteralPath (Join-Path $Dest 'morganiser.db'))) { Fail 'Copie introuvable : refaites la phase A.' }
+    $manifestData = Get-Content -LiteralPath $Manifest -Raw | ConvertFrom-Json
+    $Expected = @{}
+    foreach ($n in $Names) { $Expected[$n] = $manifestData.files.$n }
+    $C0 = Get-Snapshot $Dest
+    if (-not (Test-SameSnapshot $Expected $C0)) { Fail 'La copie ne correspond plus au manifeste de la phase A : essai refusé.' }
+
+    Assert-AppStopped
+    $B0 = Get-Snapshot $AppDataDir                       # source Dev avant l'essai
+
+    # --- Autorisation explicite, puis UNIQUEMENT le test exact --------------------
+    if ((Read-Host 'Tapez EXECUTER pour lancer la répétition sur la COPIE') -ne 'EXECUTER') { Fail 'Phase B annulée : rien n''a été exécuté.' }
+    $Started = $true
+    $env:MORGANISER_REHEARSAL_DB = Join-Path $Dest 'morganiser.db'
+    $ErrorActionPreference = 'Continue'                  # stderr de cargo ne doit pas lever d'exception
+    Push-Location $RepoTauri
+    try {
+        $lines = @(& cargo test --lib -- --exact storage::rehearsal_tests::repetition_sur_copie_isolee --ignored --nocapture 2>&1 | ForEach-Object { ("$_").TrimEnd() })
+        $exit  = $LASTEXITCODE
+    } finally {
+        Pop-Location
+        Remove-Item Env:MORGANISER_REHEARSAL_DB -ErrorAction SilentlyContinue
+        $ErrorActionPreference = 'Stop'
+    }
+    $lines | Set-Content -LiteralPath $Log -Encoding UTF8   # sortie brute : journal LOCAL, jamais affiché ni republié
+
+    # --- Résultats VÉRIFIÉS, jamais recopiés ---------------------------------------
+    $ran = -1
+    $runLines = @($lines | Where-Object { $_ -match '^running \d+ tests?$' })
+    if ($runLines.Count -eq 1) { $ran = [int]([regex]::Match($runLines[0], '\d+').Value) }
+    if ($ran -ge 0) { $Report['Tests réellement exécutés'] = [string]$ran }
+    $passed  = (@($lines | Where-Object { $_ -match '^test result: ok\. 1 passed; 0 failed; 0 ignored;' })).Count -eq 1
+    $markers = @($lines | Where-Object { $_ -match '^REHEARSAL-RESULT ' })
+    $m = $null
+    if ($markers.Count -eq 1) {
+        $match = [regex]::Match($markers[0], '^REHEARSAL-RESULT status=(OK|FAIL) from=(\d|\?) to=(\d|\?) integrity=(OK|FAIL) backup=(OK|FAIL) roundtrip=(OK|FAIL) restore=(OK|FAIL) source=(OK|DIFFERENT|UNVERIFIABLE|NOTCHECKED)$')
+        if ($match.Success) { $m = $match.Groups }
+    }
+    # Réussite = code 0 ET exactement un test ET « 1 passed » ET marqueur valide status=OK.
+    $testOk = ($exit -eq 0) -and ($ran -eq 1) -and $passed -and ($null -ne $m) -and ($m[1].Value -eq 'OK')
+    if ($testOk) {
+        $Report['Répétition'] = 'OK'
+        if ($m[2].Value -eq '1' -and $m[3].Value -eq '2') { $Report['Version'] = 'v1 -> v2 (vérifiée)' }
+        $Report['Intégrité'] = if ($m[4].Value -eq 'OK') { 'OK' } else { 'ÉCHEC' }
+        $Report['Sauvegarde et restauration'] = if ($m[5].Value -eq 'OK' -and $m[7].Value -eq 'OK') { 'OK' } else { 'ÉCHEC' }
+    }
+
+    # --- La source Dev et la copie de référence n'ont pas bougé --------------------
+    $B1 = Get-Snapshot $AppDataDir
+    $C1 = Get-Snapshot $Dest
+    $Report['Source Dev inchangée']     = if (Test-SameSnapshot $B0 $B1) { 'OK' } else { 'DIFFÉRENT' }
+    $copyOk = (Test-SameSnapshot $C0 $C1) -and (Test-SameSnapshot $Expected $C1) -and (($null -eq $m) -or ($m[8].Value -eq 'OK'))
+    $Report['Copie de référence inchangée'] = if ($copyOk) { 'OK' } else { 'DIFFÉRENT' }
+
+    if ($testOk -and -not ($Report.Values -contains 'ÉCHEC') -and -not ($Report.Values -contains 'DIFFÉRENT') -and $Report['Version'] -like 'v1*') { $Verdict = 'RÉUSSITE' }
+    elseif ($null -eq $m) { Write-Host 'Résultat inconnu : vérification manuelle des journaux locaux nécessaire.' }
+}
+catch { Write-Failure $_ $Log }
+finally {
+    Write-Host ''
+    Write-Host '===== RAPPORT SYNTHÉTIQUE (phase B) ====='
+    Write-Report $Report
+    Write-Host ('{0,-36}: {1}' -f 'Verdict', $Verdict)
+    if ($Verdict -ne 'RÉUSSITE' -and $Started) { Write-Host ('Journal local à consulter : ' + (Split-Path -Leaf $Log)) }
+    Write-Host 'La copie de référence est CONSERVÉE (aucune suppression automatique).'
+}
+
+# --- Dossiers de travail restants : nettoyage ciblé, confirmé un par un -----------
+$left = @(Get-ChildItem -LiteralPath $env:TEMP -Directory -Filter 'morganiser-rehearsal-*' -ErrorAction SilentlyContinue |
+          Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) })
+Write-Host ("Dossiers de travail restants : {0}" -f $left.Count)
+foreach ($d in $left) {
+    if ((Read-Host ("Supprimer {0} ? (oui/non)" -f $d.Name)) -eq 'oui') { Remove-Item -LiteralPath $d.FullName -Recurse -Force }
+}
+```
+
+Rapport attendu en cas de réussite : `Tests réellement exécutés : 1`, `Répétition : OK`, `Version : v1 -> v2 (vérifiée)`, `Intégrité : OK`, `Sauvegarde et restauration : OK`, `Source Dev inchangée : OK`, `Copie de référence inchangée : OK`, `Verdict : RÉUSSITE`.
+
+#### Vérification de la procédure elle-même
+Les deux phases ont été exécutées sur un **faux dossier de données** (base v1 fictive avec `-wal` et `-shm`, générée à partir de la vraie migration 0001, hors `%LOCALAPPDATA%`), jamais sur la base Dev :
+- réussite complète (phases A puis B) ;
+- zéro test exécuté (filtre inexistant) : `Verdict : ÉCHEC`, « vérification manuelle des journaux locaux nécessaire » ;
+- copie falsifiée d'un octet : phase B refusée **avant** tout test ;
+- `-wal` tenu par un autre processus : phase A refusée, aucune copie créée ;
+- défaut découvert et corrigé par cet essai : la copie de référence en lecture seule se propageait à la copie de travail (`attempt to write a readonly database`) ; l'attribut est maintenant levé sur la copie de travail uniquement (test ajouté).
+
+### Limites résiduelles
+- Les liens symboliques de **fichiers** n'ont pas pu être créés sur ce poste (privilège absent) : leur refus repose sur le code et n'a pas été exercé ; les jonctions de **dossiers** l'ont été.
+- La procédure PowerShell a été exécutée **uniquement sur des données fictives** ; jamais sur la base Dev réelle.
+- Le test refuse une base qui n'est pas en v1 : si l'application a déjà migré Dev, il n'y a rien à répéter.
+- `Test-FileFree` ouvre les fichiers en lecture exclusive ; il détecte un processus qui les tient, pas un processus qui les ouvrirait plus tard.

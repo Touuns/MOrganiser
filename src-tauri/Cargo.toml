@@ -24,6 +24,9 @@ uuid = { version = "1.27", features = ["v7"] }
 [dev-dependencies]
 serde_json = "1"
 tempfile = "3.27"
+# Empreintes SHA-256 des fichiers source du test de répétition de migration (déjà présent
+# dans le graphe via Tauri : aucune nouvelle crate, et rien dans l'exécutable livré).
+sha2 = "0.10"
 
 [profile.release]
 codegen-units = 1
