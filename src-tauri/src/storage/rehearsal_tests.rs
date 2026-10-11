@@ -413,12 +413,23 @@ fn single(conn: &Connection, sql: &str) -> String {
 // La répétition
 // ---------------------------------------------------------------------------------------------
 
+/// L'aller-retour conversion/annulation n'est JAMAIS déclaré sans avoir eu lieu : sur une capture
+/// existante de la copie, ou, si elle n'en contient aucune, sur une capture FICTIVE créée puis
+/// supprimée dans la copie temporaire (le contenu de référence est comparé ensuite).
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum RoundTrip {
+    ExistingCapture,
+    FictitiousCapture,
+}
+
 #[derive(Debug)]
 struct Report {
     version_before: u32,
     version_after: u32,
     tables: Vec<(&'static str, usize, u64)>,
     live_captures: usize,
+    /// Sur quelle capture l'aller-retour a réellement eu lieu.
+    round_trip: RoundTrip,
     backup: String,
     /// Présence de `.db`, `-wal`, `-shm` dans la source.
     present: Vec<(&'static str, bool)>,
@@ -573,24 +584,39 @@ fn run(
     }
     stages.backup = true;
 
-    // 5. Aller-retour métier : conversion, annulation, reconversion, annulation.
+    // 5. Aller-retour métier : conversion, annulation, reconversion, annulation. Sur une capture
+    //    existante ; sinon sur une capture fictive créée ICI (copie temporaire) puis supprimée.
     let live = inbox::list_items(&conn, &inbox::InboxFilter::All, inbox::Scope::Active, None, 1)
         .map_err(|e| e.to_string())?;
     let live_captures = live.total as usize;
-    if let Some(first) = live.items.first() {
-        let mut stamp = 4_000_000_000_000i64;
-        for _ in 0..2 {
-            let current = inbox::get_item(&conn, &first.id).map_err(|e| e.to_string())?;
-            stamp += 1;
-            let done = tasks::convert_item(&conn, &first.id, current.updated_at, None, stamp)
-                .map_err(|e| format!("conversion : {e}"))?;
-            stamp += 1;
-            tasks::cancel_conversion(&conn, &done.task.id, stamp).map_err(|e| format!("annulation : {e}"))?;
+    let (target_id, round_trip) = match live.items.first() {
+        Some(item) => (item.id.clone(), RoundTrip::ExistingCapture),
+        None => {
+            let created = inbox::create_item(&conn, "Capture fictive de répétition", None, 3_999_999_999_000)
+                .map_err(|e| format!("capture fictive : {e}"))?;
+            (created.id, RoundTrip::FictitiousCapture)
         }
-        if v1_fingerprints(&conn) != reference {
-            return Err("l'aller-retour conversion/annulation a modifié des captures".into());
-        }
+    };
+    let mut stamp = 4_000_000_000_000i64;
+    for _ in 0..2 {
+        let current = inbox::get_item(&conn, &target_id).map_err(|e| e.to_string())?;
+        stamp += 1;
+        let done = tasks::convert_item(&conn, &target_id, current.updated_at, None, stamp)
+            .map_err(|e| format!("conversion : {e}"))?;
+        stamp += 1;
+        tasks::cancel_conversion(&conn, &done.task.id, stamp).map_err(|e| format!("annulation : {e}"))?;
     }
+    if round_trip == RoundTrip::FictitiousCapture {
+        // Aucun résidu : tâches d'abord (clé étrangère), puis la capture fictive elle-même.
+        conn.execute("DELETE FROM tasks WHERE origin_inbox_item_id = ?1", [&target_id])
+            .map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM inbox_items WHERE id = ?1", [&target_id])
+            .map_err(|e| e.to_string())?;
+    }
+    if v1_fingerprints(&conn) != reference {
+        return Err("l'aller-retour conversion/annulation a modifié des captures".into());
+    }
+    // Seulement ici : les conversions et annulations ont réellement été exécutées.
     stages.round_trip = true;
 
     // 6. Restauration depuis la sauvegarde (procédure documentée), puis remigration.
@@ -617,6 +643,7 @@ fn run(
         version_after,
         tables: reference,
         live_captures,
+        round_trip,
         backup: backup_name,
         present: before.files.iter().map(|(s, identity)| (*s, identity.is_some())).collect(),
     })
@@ -1068,6 +1095,70 @@ fn la_repetition_fonctionne_sans_wal_et_la_source_est_intacte() {
     assert_eq!(SourceSnapshot::capture(&path).unwrap(), before);
 }
 
+/// Base v1 fictive SANS capture active (destinations seules, ou captures toutes à la corbeille).
+fn fictitious_v1_without_active_capture(trashed_only: bool) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(DB_FILE_NAME);
+    {
+        let conn = Connection::open(&path).unwrap();
+        configure(&conn).unwrap();
+        conn.execute_batch(MIGRATIONS[0]).unwrap();
+        conn.pragma_update(None, "user_version", 1).unwrap();
+        if trashed_only {
+            for i in 0..2 {
+                conn.execute(
+                    "INSERT INTO inbox_items (id, content, created_at, updated_at, deleted_at)
+                     VALUES (?1, 'À la corbeille', 5, 5, 9)",
+                    [format!("t{i}")],
+                )
+                .unwrap();
+            }
+        }
+    }
+    (dir, path)
+}
+
+#[test]
+fn sans_capture_active_l_aller_retour_a_lieu_sur_une_capture_fictive_sans_residu() {
+    for trashed_only in [false, true] {
+        let (_dir, path) = fictitious_v1_without_active_capture(trashed_only);
+        let before = SourceSnapshot::capture(&path).unwrap();
+
+        let outcome = rehearse(&path);
+        assert_unchanged(&outcome);
+        assert!(outcome.stages.round_trip, "l'aller-retour a réellement été exécuté");
+        let report = outcome.result.unwrap();
+        assert_eq!(report.live_captures, 0);
+        assert_eq!(report.round_trip, RoundTrip::FictitiousCapture);
+        // Le contenu de référence est intact : 0 ou 2 captures, aucune capture fictive restante.
+        let expected_rows = if trashed_only { 2 } else { 0 };
+        assert_eq!(report.tables.iter().find(|t| t.0 == "inbox_items").unwrap().1, expected_rows);
+        assert_eq!(SourceSnapshot::capture(&path).unwrap(), before);
+        assert_eq!(
+            marker_line(&rehearse(&path)),
+            "REHEARSAL-RESULT status=OK from=1 to=2 integrity=OK backup=OK roundtrip=OK restore=OK source=OK"
+        );
+    }
+}
+
+#[test]
+fn avec_des_captures_actives_l_aller_retour_utilise_une_capture_existante() {
+    let (_dir, path) = fictitious_v1();
+    let report = rehearse(&path).result.unwrap();
+    assert_eq!(report.round_trip, RoundTrip::ExistingCapture);
+}
+
+#[test]
+fn le_roundtrip_n_est_jamais_declare_quand_il_n_a_pas_eu_lieu() {
+    // Échec AVANT l'aller-retour (base déjà migrée) : roundtrip jamais « OK ».
+    let (_dir, path) = fictitious_v1_without_active_capture(false);
+    drop(open(&path).unwrap());
+    let outcome = rehearse(&path);
+    assert!(outcome.result.is_err());
+    assert!(!outcome.stages.round_trip);
+    assert!(marker_line(&outcome).contains("roundtrip=FAIL"));
+}
+
 #[test]
 fn la_repetition_fonctionne_avec_wal_et_shm_et_ne_les_modifie_pas() {
     let (_dir, path) = fictitious_v1_with_wal();
@@ -1399,6 +1490,14 @@ fn repetition_sur_copie_isolee() {
                 println!("  {table}: {count} ligne(s), contenu identique à la référence après migration");
             }
             println!("  captures actives : {}", report.live_captures);
+            println!(
+                "  aller-retour conversion/annulation : {}",
+                match report.round_trip {
+                    RoundTrip::ExistingCapture => "sur une capture existante de la copie",
+                    RoundTrip::FictitiousCapture =>
+                        "sur une capture FICTIVE créée puis supprimée dans la copie temporaire",
+                }
+            );
             println!("  sauvegarde avant migration : vérifiée ({})", report.backup);
             for (suffix, present) in &report.present {
                 println!("  {} dans la source : {}", file_label(suffix), if *present { "présent" } else { "absent" });

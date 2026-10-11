@@ -268,6 +268,9 @@ Le dossier de travail est préfixé `morganiser-rehearsal-` dans `%TEMP%`.
 - **Suppression partielle** : `TempDir` ignore les erreurs (fichier tenu par un antivirus, un indexeur) ; un reliquat est possible même après une réussite.
 - **Recommandation** : lister puis supprimer seulement `morganiser-rehearsal-*`, avec confirmation dossier par dossier, jamais `%TEMP%` en bloc (étape 8 ci-dessous).
 
+### Aller-retour conversion/annulation : jamais déclaré sans avoir eu lieu
+Si la copie ne contient **aucune capture active** (base vide, ou captures toutes à la corbeille), le test crée une capture **fictive** dans la copie temporaire, exécute réellement les deux aller-retour, puis supprime la capture et ses tâches avant de comparer le contenu de référence (restauration depuis la sauvegarde ensuite). Choix : plus sûr et plus informatif que « étape non exécutée », car le schéma v2, ses index et ses déclencheurs sont alors exercés sur la base réellement migrée ; `roundtrip=OK` n'est positionné qu'après l'exécution effective des conversions et annulations. Le rapport indique si l'essai a eu lieu sur une capture existante ou fictive.
+
 ### Tests ajoutés (bases fictives, dossiers temporaires)
 Variable absente, vide, espaces ; chemin relatif, `..`, mauvais nom, inexistant (rien n'est créé) ; zones protégées (dossiers Dev et Stable fictifs, `com.morganiser*`, casse, préfixe verbatim) ; zone protégée non résolue ; absence de chemin personnel dans les refus ; jonction vers une zone protégée (chemin canonique) et vers un dossier ordinaire (redirection) ; lien symbolique (si le privilège existe) ; `-wal` absent, présent, dossier ; SHA-256 de référence ; changement de contenu à taille identique ; changement avec **date restaurée** ; échec de copie ; source modifiée pendant la copie ; copie infidèle ; source illisible ; source inchangée après réussite et après échec ; nettoyage après réussite, erreur, panique et arrêt brutal.
 
@@ -278,6 +281,8 @@ Principes :
 - **Aucune sortie brute n'est republiée.** Le rapport est un tableau synthétique construit à partir de résultats vérifiés (code de sortie, nombre de tests, ligne `test result`, ligne-marqueur). La sortie complète de `cargo` est écrite dans un **journal local** (`journal-phaseB-….log`, dans le dossier d'essais), jamais affichée.
 - **Une réussite trompeuse est impossible :** code de sortie 0 **et** exactement un test exécuté **et** `1 passed; 0 failed; 0 ignored` **et** marqueur `status=OK` valide. Zéro test exécuté = échec.
 - **Messages fixes** : les arrêts contrôlés affichent des phrases sans chemin ; toute autre erreur affiche seulement qu'une vérification manuelle des journaux locaux est nécessaire.
+- **Source Dev validée avant toute lecture de contenu** (`Assert-DevSource`, métadonnées seulement, phases A et B) : le dossier doit être `…\com.morganiser.desktop.dev\data` ; il ne doit pas désigner Stable ; ni lui ni aucun de ses parents ne doit être un lien ou une jonction ; une redirection vers Stable est refusée explicitement ; chacun des trois fichiers présents doit être un fichier ordinaire (ni dossier, ni lien). Le dossier Stable n'est jamais lu : `$StableDataDir` ne sert qu'à une comparaison de chaînes.
+- **Cohérence A/B :** la phase B recalcule les empreintes de la source Dev actuelle et les compare au manifeste de la phase A (nom, présence, SHA-256, fichier par fichier). Toute différence refuse l'essai **avant** la répétition ; la copie de référence est conservée et une nouvelle phase A est requise.
 - **Aucune suppression automatique.** La copie de référence n'est jamais supprimée ; les dossiers `morganiser-rehearsal-*` restants sont listés puis supprimés un par un, sur confirmation `oui`, jamais `%TEMP%` en bloc.
 
 #### Bloc commun
@@ -285,6 +290,7 @@ Principes :
 # ===== BLOC COMMUN (identique en tête des phases A et B) ============================
 $ErrorActionPreference = 'Stop'
 $AppDataDir = Join-Path $env:LOCALAPPDATA 'com.morganiser.desktop.dev\data'   # Dev UNIQUEMENT
+$StableDataDir = Join-Path $env:LOCALAPPDATA 'com.morganiser.desktop\data'      # comparaison de chaînes SEULEMENT : jamais lu
 $Root       = 'C:\MOrganiserEssais'                   # dossier local NON synchronisé
 $RepoTauri  = 'I:\ProjetDEv\Morganiser\src-tauri'
 $Names      = @('morganiser.db', 'morganiser.db-wal', 'morganiser.db-shm')
@@ -322,6 +328,38 @@ function Assert-SafeFolder([string]$Path) {       # hors zones protégées et sy
         $probe = $parent
     }
 }
+function Assert-DevSource([string]$Dir) {         # MÉTADONNÉES seulement : aucun contenu lu avant validation
+    $full = [IO.Path]::GetFullPath($Dir).TrimEnd('\')
+    $stable = [IO.Path]::GetFullPath($StableDataDir).TrimEnd('\')
+    if ($full -notlike '*\com.morganiser.desktop.dev\data') { Fail 'Le dossier source n''est pas le dossier de données Dev attendu.' }
+    if ($full.StartsWith($stable, [StringComparison]::OrdinalIgnoreCase)) { Fail 'Le dossier source désigne Stable : refus.' }
+    $probe = $full                                  # le dossier ET chacun de ses parents : ni lien, ni jonction
+    while ($probe) {
+        $item = Get-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue
+        if ($item -and ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            $target = ($item.Target -join ';')
+            if ($target -match '\\com\.morganiser\.desktop(\\|;|$)' -or $target.StartsWith($stable, [StringComparison]::OrdinalIgnoreCase)) {
+                Fail 'Le dossier Dev est redirigé vers Stable : refus.'
+            }
+            Fail 'Le dossier source ou l''un de ses parents est un lien ou une jonction : refus.'
+        }
+        $parent = Split-Path -Parent $probe
+        if (-not $parent -or $parent -eq $probe) { break }
+        $probe = $parent
+    }
+    if (-not (Test-Path -LiteralPath $full -PathType Container)) { Fail 'Dossier de données Dev introuvable.' }
+    foreach ($n in $Names) {                        # chaque fichier présent : ordinaire, ni lien, ni dossier
+        $f = Get-Item -LiteralPath (Join-Path $full $n) -Force -ErrorAction SilentlyContinue
+        if ($f) {
+            if ($f.PSIsContainer) { Fail "$n n'est pas un fichier ordinaire : refus." }
+            if ($f.Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                $target = ($f.Target -join ';')
+                if ($target -match '\\com\.morganiser\.desktop(\\|;|$)') { Fail "$n est redirigé vers Stable : refus." }
+                Fail "$n est un lien : refus."
+            }
+        }
+    }
+}
 function Assert-AppStopped {                      # « Quitter » depuis la zone de notification ; le × ne fait que masquer
     if (Get-Process -Name 'morganiser-dev' -ErrorAction SilentlyContinue) { Fail 'M''Organiser Dev tourne encore : quittez-le puis relancez.' }
     $held = @(Get-Process | Where-Object { try { $_.Path -like '*morganiser-dev*' } catch { $false } })
@@ -355,6 +393,7 @@ $Dest     = Join-Path $Root ("dev-$Stamp")
 $Manifest = "$Dest.manifest.json"
 $Log      = Join-Path $Root ("journal-phaseA-$Stamp.log")
 $Report   = [ordered]@{
+    'Dossier Dev ordinaire (sans lien)'  = 'ÉCHEC'
     'Application Dev arrêtée'            = 'ÉCHEC'
     'Copie fidèle (.db, -wal, -shm)'     = 'ÉCHEC'
     'Source Dev inchangée'               = 'ÉCHEC'
@@ -366,6 +405,8 @@ try {
     Assert-SafeFolder $Root
     if (Test-Path -LiteralPath $Dest) { Fail 'La destination existe déjà.' }
 
+    Assert-DevSource $AppDataDir                         # chemins validés AVANT toute lecture de contenu
+    $Report['Dossier Dev ordinaire (sans lien)'] = 'OK'
     Assert-AppStopped
     $Report['Application Dev arrêtée'] = 'OK'
 
@@ -413,6 +454,7 @@ $DestLeaf = ''          # À RENSEIGNER : nom du dossier validé par la phase A,
 $Stamp    = Get-Date -Format 'yyyyMMdd-HHmmss'
 $Log      = Join-Path $Root ("journal-phaseB-$Stamp.log")
 $Report   = [ordered]@{
+    'Source Dev identique à la phase A'  = 'ÉCHEC'
     'Tests réellement exécutés'          = 'inconnu'
     'Répétition'                         = 'ÉCHEC'
     'Version'                            = 'non vérifiée'
@@ -439,8 +481,15 @@ try {
     $C0 = Get-Snapshot $Dest
     if (-not (Test-SameSnapshot $Expected $C0)) { Fail 'La copie ne correspond plus au manifeste de la phase A : essai refusé.' }
 
+    Assert-DevSource $AppDataDir                         # chemins validés AVANT toute lecture de contenu
     Assert-AppStopped
     $B0 = Get-Snapshot $AppDataDir                       # source Dev avant l'essai
+    # La source Dev doit être celle de la phase A : mêmes fichiers (nom, présence), mêmes SHA-256.
+    if (-not (Test-SameSnapshot $Expected $B0)) {
+        $Report['Source Dev identique à la phase A'] = 'DIFFÉRENT'
+        Fail 'La source Dev a changé depuis la phase A : copie conservée, essai refusé. Refaites la phase A.'
+    }
+    $Report['Source Dev identique à la phase A'] = 'OK'
 
     # --- Autorisation explicite, puis UNIQUEMENT le test exact --------------------
     if ((Read-Host 'Tapez EXECUTER pour lancer la répétition sur la COPIE') -ne 'EXECUTER') { Fail 'Phase B annulée : rien n''a été exécuté.' }
@@ -508,7 +557,7 @@ foreach ($d in $left) {
 }
 ```
 
-Rapport attendu en cas de réussite : `Tests réellement exécutés : 1`, `Répétition : OK`, `Version : v1 -> v2 (vérifiée)`, `Intégrité : OK`, `Sauvegarde et restauration : OK`, `Source Dev inchangée : OK`, `Copie de référence inchangée : OK`, `Verdict : RÉUSSITE`.
+Rapport attendu en cas de réussite : `Source Dev identique à la phase A : OK`, `Tests réellement exécutés : 1`, `Répétition : OK`, `Version : v1 -> v2 (vérifiée)`, `Intégrité : OK`, `Sauvegarde et restauration : OK`, `Source Dev inchangée : OK`, `Copie de référence inchangée : OK`, `Verdict : RÉUSSITE`.
 
 #### Vérification de la procédure elle-même
 Les deux phases ont été exécutées sur un **faux dossier de données** (base v1 fictive avec `-wal` et `-shm`, générée à partir de la vraie migration 0001, hors `%LOCALAPPDATA%`), jamais sur la base Dev :
@@ -516,10 +565,18 @@ Les deux phases ont été exécutées sur un **faux dossier de données** (base 
 - zéro test exécuté (filtre inexistant) : `Verdict : ÉCHEC`, « vérification manuelle des journaux locaux nécessaire » ;
 - copie falsifiée d'un octet : phase B refusée **avant** tout test ;
 - `-wal` tenu par un autre processus : phase A refusée, aucune copie créée ;
+- **source Dev fictive modifiée après la phase A : phase B refusée avant tout test** (`Source Dev identique à la phase A : DIFFÉRENT`, aucun test exécuté, copie conservée) ;
+- **dossier Dev fictif = jonction vers Stable fictif** (fichier Stable verrouillé : toute tentative de lecture aurait échoué) : refus « redirigé vers Stable », Stable intact ;
+- **parent du dossier Dev fictif = jonction** : refus ;
+- **fichier associé (`-shm`) remplacé par un dossier** : refus ;
+- retour à la normale : phase A de nouveau réussie ;
+- ces scénarios tournent avec `LOCALAPPDATA` redirigée vers un faux dossier (processus enfants seulement), ce qui permet d'exécuter les scripts **non modifiés** ;
 - défaut découvert et corrigé par cet essai : la copie de référence en lecture seule se propageait à la copie de travail (`attempt to write a readonly database`) ; l'attribut est maintenant levé sur la copie de travail uniquement (test ajouté).
 
 ### Limites résiduelles
 - Les liens symboliques de **fichiers** n'ont pas pu être créés sur ce poste (privilège absent) : leur refus repose sur le code et n'a pas été exercé ; les jonctions de **dossiers** l'ont été.
 - La procédure PowerShell a été exécutée **uniquement sur des données fictives** ; jamais sur la base Dev réelle.
+- Les liens symboliques de **fichiers** n'ont pas pu être créés sur ce poste (privilège absent) : leur refus par `Assert-DevSource` repose sur le code ; jonctions de dossiers et dossiers à la place d'un fichier sont exercés.
+- Les liens physiques (« hard links ») ne sont pas détectés ; ils ne pourraient mener qu'à une lecture seule, car la source n'est jamais ouverte en écriture ni par SQLite.
 - Le test refuse une base qui n'est pas en v1 : si l'application a déjà migré Dev, il n'y a rien à répéter.
 - `Test-FileFree` ouvre les fichiers en lecture exclusive ; il détecte un processus qui les tient, pas un processus qui les ouvrirait plus tard.
