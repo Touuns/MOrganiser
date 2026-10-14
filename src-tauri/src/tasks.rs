@@ -15,7 +15,7 @@
 use std::fmt;
 
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 
 use crate::inbox::{self, Cursor, InboxError, InboxItem};
 
@@ -51,7 +51,9 @@ impl TaskStatus {
 pub struct Task {
     pub id: String,
     pub title: String,
-    /// Copie intégrale du texte de la capture au moment de la conversion.
+    /// Description de la tâche. Par défaut (conversion sans description fournie), copie intégrale
+    /// du texte de la capture ; depuis 003-A, l'utilisateur peut la réécrire avant de créer la
+    /// tâche. La capture, elle, n'est jamais modifiée par la conversion.
     pub details: String,
     pub status: TaskStatus,
     pub destination_id: Option<String>,
@@ -188,12 +190,38 @@ fn item_error(error: InboxError) -> TaskError {
     }
 }
 
-/// Transforme une capture en tâche, en une seule transaction.
+/// Classement de la tâche à la conversion (003-A). Le schéma ne porte encore qu'une seule
+/// destination : univers et rubrique ne sont pas deux champs distincts.
 ///
-/// `expected_updated_at` : la version de la capture que l'utilisateur a sous les yeux ; une
-/// capture modifiée depuis est refusée (`Conflict`), jamais convertie « à l'aveugle ».
-/// `title` : `None` utilise la suggestion. La capture garde son texte, sa destination et son
-/// `updated_at` ; seuls `converted_at` et `converted_task_id` changent.
+/// Côté interface : `{ "type": "keep" }`, `{ "type": "clear" }` ou `{ "type": "set", "id": "…" }`.
+/// Trois états explicites, car « absent » et « aucune » ne se distinguent pas dans une commande.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum DestinationChoice {
+    /// Reprendre la destination enregistrée de la capture (comportement historique).
+    #[default]
+    Keep,
+    /// Tâche sans classement, quelle que soit la destination de la capture.
+    Clear,
+    /// Une autre destination, qui doit exister et être active.
+    Set { id: String },
+}
+
+/// Ce que l'utilisateur a saisi dans le brouillon de tâche. Tout est facultatif : un champ
+/// absent reprend la valeur de la capture ou la suggestion (comportement de la brique 002).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConversionDraft {
+    /// `None` : titre suggéré.
+    pub title: Option<String>,
+    /// `None` : copie intégrale du texte de la capture.
+    pub details: Option<String>,
+    pub destination: DestinationChoice,
+}
+
+/// Transforme une capture en tâche avec les valeurs par défaut (titre suggéré, texte et
+/// destination de la capture). Voir [`convert_item_with`]. Réservée aux tests (l'application passe
+/// toujours par `convert_item_with`) : elle garde leur signature historique.
+#[cfg(test)]
 pub fn convert_item(
     conn: &Connection,
     item_id: &str,
@@ -201,7 +229,40 @@ pub fn convert_item(
     title: Option<&str>,
     now_ms: i64,
 ) -> Result<Conversion, TaskError> {
-    let given_title = title.map(normalize_title).transpose()?;
+    let draft = ConversionDraft { title: title.map(str::to_owned), ..ConversionDraft::default() };
+    convert_item_with(conn, item_id, expected_updated_at, &draft, now_ms)
+}
+
+/// Description fournie par l'utilisateur : extrémités nettoyées, ni vide ni trop longue. Les
+/// retours à la ligne et espaces intérieurs sont conservés (c'est un texte libre).
+fn normalize_details(details: &str) -> Result<String, TaskError> {
+    let details = details.trim();
+    if details.is_empty() {
+        return Err(TaskError::EmptyDetails);
+    }
+    if details.chars().count() > inbox::MAX_CONTENT_CHARS {
+        return Err(TaskError::DetailsTooLong);
+    }
+    Ok(details.to_owned())
+}
+
+/// Transforme une capture en tâche, en une seule transaction.
+///
+/// `expected_updated_at` : la version de la capture que l'utilisateur a sous les yeux ; une
+/// capture modifiée depuis est refusée (`Conflict`), jamais convertie « à l'aveugle ».
+/// `draft` : titre (suggestion si absent), description (texte de la capture si absente) et
+/// destination. La capture garde son texte, sa destination et son `updated_at` quoi que la
+/// tâche contienne ; seuls `converted_at` et `converted_task_id` changent.
+pub fn convert_item_with(
+    conn: &Connection,
+    item_id: &str,
+    expected_updated_at: i64,
+    draft: &ConversionDraft,
+    now_ms: i64,
+) -> Result<Conversion, TaskError> {
+    // Validations qui ne dépendent pas de la base : avant de prendre le verrou d'écriture.
+    let given_title = draft.title.as_deref().map(normalize_title).transpose()?;
+    let given_details = draft.details.as_deref().map(normalize_details).transpose()?;
 
     // IMMEDIATE : le verrou d'écriture est pris AVANT les lectures de contrôle, donc rien ne
     // peut les rendre périmées avant l'écriture (y compris depuis une autre connexion).
@@ -224,13 +285,36 @@ pub fn convert_item(
             normalize_title(&suggestion)?
         }
     };
+    let details = given_details.unwrap_or_else(|| item.content.clone());
+
+    // La destination de la tâche est indépendante de celle de la capture, qui ne change jamais.
+    let destination_id: Option<String> = match &draft.destination {
+        DestinationChoice::Keep => item.destination_id.clone(),
+        DestinationChoice::Clear => None,
+        DestinationChoice::Set { id } => {
+            // Une destination inchangée reste acceptée même archivée depuis (comme en 001-B).
+            if item.destination_id.as_deref() != Some(id.as_str()) {
+                let active: Option<String> = tx
+                    .query_row(
+                        "SELECT id FROM destinations WHERE id = ?1 AND archived_at IS NULL",
+                        params![id],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if active.is_none() {
+                    return Err(TaskError::UnknownDestination);
+                }
+            }
+            Some(id.clone())
+        }
+    };
 
     let task_id = uuid::Uuid::now_v7().to_string();
     let inserted = tx.execute(
         "INSERT INTO tasks (id, title, details, status, destination_id, origin_inbox_item_id,
                             created_at, updated_at)
          VALUES (?1, ?2, ?3, 'todo', ?4, ?5, ?6, ?6)",
-        params![task_id, title, item.content, item.destination_id, item.id, now_ms],
+        params![task_id, title, details, destination_id, item.id, now_ms],
     );
     if let Err(error) = inserted {
         return Err(unique_violation_to_already_converted(&tx, &item.id, error));
@@ -331,6 +415,11 @@ pub enum TaskError {
     Conflict,
     EmptyTitle,
     TitleTooLong,
+    /// Description vide (le schéma actuel l'interdit ; levé plus tard avec le modèle enrichi).
+    EmptyDetails,
+    DetailsTooLong,
+    /// Destination choisie pour la tâche inconnue ou archivée.
+    UnknownDestination,
     /// Tâche introuvable.
     TaskNotFound,
     /// Tâche déjà annulée.
@@ -355,6 +444,9 @@ impl TaskError {
             TaskError::Conflict => "version_conflict",
             TaskError::EmptyTitle => "empty_title",
             TaskError::TitleTooLong => "title_too_long",
+            TaskError::EmptyDetails => "empty_details",
+            TaskError::DetailsTooLong => "details_too_long",
+            TaskError::UnknownDestination => "unknown_destination",
             TaskError::TaskNotFound => "task_not_found",
             TaskError::NotActive => "task_not_active",
             TaskError::NoOrigin => "no_origin",
@@ -382,6 +474,11 @@ impl fmt::Display for TaskError {
             TaskError::TitleTooLong => {
                 write!(f, "Le titre dépasse {MAX_TITLE_CHARS} caractères.")
             }
+            TaskError::EmptyDetails => write!(f, "La description de la tâche est vide."),
+            TaskError::DetailsTooLong => {
+                write!(f, "La description dépasse {} caractères.", inbox::MAX_CONTENT_CHARS)
+            }
+            TaskError::UnknownDestination => write!(f, "Cette destination n'est pas disponible."),
             TaskError::TaskNotFound => write!(f, "Cette tâche n'existe plus."),
             TaskError::NotActive => write!(f, "Cette tâche est déjà annulée."),
             TaskError::NoOrigin => write!(f, "Cette tâche ne vient pas d'une capture."),

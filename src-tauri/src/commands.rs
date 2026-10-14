@@ -10,7 +10,7 @@ use tauri::State;
 
 use crate::environment::Channel;
 use crate::inbox::{self, Cursor, Destination, InboxError, InboxFilter, InboxItem, InboxPage, Scope};
-use crate::tasks::{self, Conversion, Task, TaskError, TaskPage};
+use crate::tasks::{self, Conversion, ConversionDraft, DestinationChoice, Task, TaskError, TaskPage};
 use crate::{AppEnvironment, Database};
 
 /// Informations de diagnostic affichées dans la fenêtre. Lecture seule.
@@ -161,17 +161,20 @@ pub async fn create_inbox_item(
 
 // --- Conversion des captures en tâches (002-A) ---
 
-/// Transforme une capture en tâche. `title` : `None` utilise le titre proposé.
+/// Transforme une capture en tâche à partir du brouillon saisi (003-A). Tout est facultatif :
+/// `title` absent = titre proposé ; `details` absent = texte intégral de la capture ;
+/// `destination` absente = destination de la capture. La capture n'est jamais modifiée.
 #[tauri::command]
 pub async fn convert_inbox_item_to_task(
     db: State<'_, Database>,
     id: String,
     expected_updated_at: i64,
     title: Option<String>,
+    details: Option<String>,
+    destination: Option<DestinationChoice>,
 ) -> Result<Conversion, TaskError> {
-    with_db(&db, |conn| {
-        tasks::convert_item(conn, &id, expected_updated_at, title.as_deref(), now_ms())
-    })
+    let draft = ConversionDraft { title, details, destination: destination.unwrap_or_default() };
+    with_db(&db, |conn| tasks::convert_item_with(conn, &id, expected_updated_at, &draft, now_ms()))
 }
 
 /// Annule la conversion : la capture revient dans la boîte, la tâche est conservée.

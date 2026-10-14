@@ -1,0 +1,60 @@
+.task-editor {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.task-editor__field {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.task-editor__field label {
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--color-text-muted);
+}
+
+.task-editor__field input[type="text"],
+.task-editor__field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg);
+  color: var(--color-text);
+  font: inherit;
+  line-height: var(--leading);
+}
+
+.task-editor__field textarea {
+  min-height: 8rem;
+  resize: vertical;
+}
+
+.task-editor__field input[type="text"]:focus-visible,
+.task-editor__field textarea:focus-visible {
+  outline: none;
+  border-color: var(--color-focus);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-focus) 35%, transparent);
+}
+
+.task-editor__field input[readonly],
+.task-editor__field textarea[readonly] {
+  background: var(--color-surface-muted);
+}
+
+.task-editor__field input[aria-invalid="true"],
+.task-editor__field textarea[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+.task-editor__field select {
+  justify-self: start;
+  max-width: 100%;
+}
+
+.task-editor__error {
+  font-size: var(--text-sm);
+  color: var(--color-danger);
+}

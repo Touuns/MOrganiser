@@ -24,6 +24,12 @@
   --color-env-stable-bg: #dff3ef;
   --color-env-stable-text: #155e57;
 
+  /* Recouvrement derrière une fenêtre modale : fond assombri et légèrement flouté */
+  --color-overlay: rgb(12 18 24 / 0.5);
+  --color-overlay-solid: rgb(12 18 24 / 0.82);
+  --blur-overlay: 3px;
+  --shadow-modal: 0 12px 40px rgb(0 0 0 / 0.28);
+
   /* Typographie */
   --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
   --font-mono: "Cascadia Mono", Consolas, monospace;

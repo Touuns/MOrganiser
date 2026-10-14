@@ -38,8 +38,8 @@ La construction doit être **modulaire sans sur-ingénierie** : créer seulement
 ## Objets conceptuels
 
 - `InboxItem` : texte brut, créé le, destination facultative (pas un tag), éventuellement transformé sans perte de source.
-- `Destination` : espace de responsabilité (Moi, Externe) ou rubrique (Administratif, Finances, Inventaire) ; identifiant stable, renommable, archivable, jamais supprimée.
-- `Task` : identifiant, titre, statut, priorité facultative, échéance facultative, responsabilité, liens, date création/clôture.
+- `Destination` : espace de responsabilité (Moi, Externe) ou rubrique (Administratif, Finances, Inventaire) ; identifiant stable, renommable, archivable, jamais supprimée. *(Précisé le 2026-10-14 : responsabilité et rubrique sont des notions indépendantes, voir « Notions indépendantes » ci-dessous ; la liste des rubriques est ouverte.)*
+- `Task` : identifiant, titre, statut, priorité facultative, échéance facultative, responsabilité, liens, date création/clôture. *(Implémenté en 002 : identifiant, titre, détails, statut, destination, origine, dates. L'enrichissement est cadré dans `briques/BRIQUE_003_FICHE_TACHE_ENRICHIE.md`.)*
 - `TaskRelation` : parent/enfant OU dépendance explicite ; ne pas confondre ces deux relations.
 - `Person` : fiche de contexte et relations, sans doublons inutiles.
 - `InventoryItem` : objet/collection et propriétés typées facultatives.
@@ -50,6 +50,35 @@ La construction doit être **modulaire sans sur-ingénierie** : créer seulement
 - `UserPreferences` : configuration d'affichage, tri, compact/étendu, onboarding, sécurité facultative.
 
 Ces entités sont une **carte conceptuelle**, pas un ordre de créer dix tables dès la première brique.
+
+## Notions indépendantes (cadrage 003-0, 2026-10-14 — VALIDÉ pour le principe)
+
+M'Organiser distingue des notions **indépendantes** ; aucune ne se déduit d'une autre. État d'implémentation à ce jour entre parenthèses.
+
+| Notion | Rôle | Exemples |
+|---|---|---|
+| **Entrée** (Capture & Idées) | Où arrivent les informations non traitées | capture rapide, captures récentes, éléments à traiter (implémenté : boîte « À organiser », « Traitées ») |
+| **Univers de responsabilité** | Pour qui : dimension transversale de classement et de filtrage | Tous, Moi, Externe (implémenté seulement comme « destination » unique d'une capture) |
+| **Rubrique** | Domaine métier, **liste ouverte** | Administratif, Finance(s), Inventaire ; plus tard Projets, Santé, Apprentissage, Maison, Voyages… (liste par défaut : À DÉCIDER) |
+| **Type d'élément** | Ce qu'est l'élément ; **tout n'est pas une tâche** | tâche (implémenté), rendez-vous, note, objet d'inventaire, dossier administratif, opération financière, document (introduits progressivement) |
+| **État d'avancement** | Où en est l'élément, propre aux types qui progressent | à faire, en cours, en attente, bloqué, terminé |
+
+Conséquences :
+
+- Une tâche administrative peut appartenir **simultanément** à l'univers Moi et à la rubrique Administratif. Représentation de ces deux dimensions pour une tâche : **À DÉCIDER** (`briques/BRIQUE_003_FICHE_TACHE_ENRICHIE.md`, Q3). Une **capture** conserve une destination unique et facultative (décision du 2026-10-10).
+- Les vues et filtres **ne créent jamais de doublon physique** : un élément existe une fois, plusieurs vues le montrent.
+- Ajouter une rubrique ou un type ne doit pas imposer une architecture complète nouvelle.
+- Un objet d'inventaire peut exister sans tâche et être associé plus tard à plusieurs tâches.
+- La **priorité** est une information propre à l'élément, indépendante de l'univers.
+- La **visibilité** d'une capture traitée se **déduit** du statut de sa tâche ; elle n'entraîne aucune suppression physique.
+
+## Relations entre éléments (principe VALIDÉ ; schéma À DÉCIDER ; HORS PÉRIMÈTRE de la brique 003)
+
+- Un élément peut être lié à plusieurs autres ; la relation est **consultable depuis chaque extrémité**, enregistrée **une seule fois**, sans duplication logique.
+- Exemples : tâche ↔ objet, tâche ↔ dossier, facture ↔ opération, rendez-vous ↔ dossier.
+- Les relations **symétriques** et **dirigées** (ex. parent/enfant, dépendance) doivent être distinguées ; la hiérarchie de tâches (brique 005) ne se confond pas avec une relation générique.
+- Points à étudier avant le schéma : identifiants (les UUID v7 existants sont déjà globalement uniques), intégrité entre types différents, suppression logique et réapparition, prévention des doublons, garde d'annulation des conversions (contrat de la fiche 002, section 10).
+- Aucun schéma SQL n'est décidé. Le moteur de relations et la vue « Connexions » sont une brique ultérieure (`10_TABLEAU_DE_BORD.md`, sections 8 et 11).
 
 ## Local-first
 

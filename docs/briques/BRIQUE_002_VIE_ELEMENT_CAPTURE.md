@@ -1,7 +1,9 @@
 # Brique 002 — Vie d'un élément capturé : transformation d'une capture en tâche
 
 **Document de référence unique de la brique 002.**
-**État : 002-A (PR #7) et 002-B (PR #8) validées et fusionnées dans `main` ; 002-C implémentée sur la branche `brique-002c-traitees` (2026-10-11), en attente de validation.**
+**État : 002-A (PR #7), 002-B (PR #8) et 002-C (PR #9) validées et fusionnées dans `main`** (statuts corrigés le 2026-10-14 d'après l'historique Git ; le garde-fou de répétition de migration de la section 13 est fusionné en PR #10).
+
+> **Évolutions décidées par le cadrage 003-0 (2026-10-14), non développées.** La brique 003 (`BRIQUE_003_FICHE_TACHE_ENRICHIE.md`) remplace le **panneau de conversion** de la section 11 par une grande fiche modale en brouillon (description et classement modifiables, plus de texte « figé »), et fait de « Traitées » (section 12) une vue qui ne montre plus les captures dont la tâche est **terminée**. Les invariants des sections 5 et 6, la garde d'annulation, la sauvegarde préalable et le contrat de la section 10 restent **en vigueur** ; leurs points de tension sont listés dans la fiche 003, sections 6 et 12. Les sections 11 et 12 décrivent ce qui est **actuellement** implémenté.
 **Dépendances :** brique 001 (A à E) validée et fusionnée dans `main`.
 **À lire avec :** `01_CAHIER_DES_CHARGES.md` (sections C et D), `03_ARCHITECTURE.md`, `04_SECURITE.md`, `05_ROADMAP.md`, `BRIQUE_001_CAPTURE_RAPIDE.md`.
 
@@ -31,7 +33,7 @@ Fiche, édition du texte et de la destination, brouillon protégé, verrou optim
 |---|---|---|
 | **002-A** | Migration 0002, modèle minimal, commandes Rust, conversion et annulation atomiques, sauvegarde préalable aux migrations, tests | Validée et fusionnée (PR #7) |
 | **002-B** | « Transformer en tâche » dans la fiche (aperçu du titre, notification « Annuler »), première liste des tâches en lecture seule, liens « Tâches » dans l'en-tête de la boîte | Validée et fusionnée (PR #8) |
-| **002-C** | Vue « Traitées », provenance depuis la tâche, restauration contrôlée (« Remettre dans la boîte »), finitions | Implémentée, en attente de validation |
+| **002-C** | Vue « Traitées », provenance depuis la tâche, restauration contrôlée (« Remettre dans la boîte »), finitions | Validée et fusionnée (PR #9) |
 
 002-A n'ajoute aucune interface ; 002-B ajoute la conversion et la liste des tâches (section 11). Hors périmètre de 002 : statuts avancés, terminer une tâche, sous-tâches, notes, projets, moteur d'initiation.
 
@@ -186,7 +188,7 @@ Test Rust `repetition_sur_copie_isolee`, `#[ignore]`, paramétré par `MORGANISE
 - Fiche de tâche en lecture seule ; aucune édition ni changement de statut (003).
 - À 360×480 la boîte reste très petite (limite préexistante, voir 001-E).
 
-## 12. Réalisation 002-C : captures traitées et traçabilité (2026-10-11, en attente de validation)
+## 12. Réalisation 002-C : captures traitées et traçabilité (2026-10-11, validée et fusionnée : PR #9)
 
 Aucune nouvelle commande Rust, aucune migration : `list_converted_items`, `cancel_task_conversion`, `get_inbox_item` et `get_task` de 002-A suffisent. Seul un wrapper TypeScript (`listConvertedItems`) est ajouté.
 
@@ -239,7 +241,7 @@ Les protections Rust restent l'autorité finale : l'interface ne contourne rien 
 - En fenêtre de 380 px, les trois liens de l'en-tête passent sur deux lignes (« Corbeille » seule sur la seconde).
 - Essai Windows réel avec la base Dev : toujours interdit tant que la répétition de migration sur copie isolée n'a pas été autorisée et exécutée.
 
-## 13. Répétition de migration : garde-fous renforcés et procédure (2026-10-12, en attente de validation)
+## 13. Répétition de migration : garde-fous renforcés et procédure (2026-10-12, fusionnée : PR #10)
 
 Branche `chore/rehearsal-safety`. Seul le dispositif de test (`storage/rehearsal_tests.rs`) est modifié, plus la dépendance de test `sha2` (déjà présente dans le graphe via Tauri : aucune nouvelle crate, rien dans l'exécutable livré). Aucun code de production, aucune migration, `environment.rs` et `backup.rs` inchangés.
 

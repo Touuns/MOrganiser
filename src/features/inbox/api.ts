@@ -33,7 +33,10 @@ export type TaskStatus = "todo" | "in_progress" | "waiting" | "blocked" | "done"
 export interface Task {
   id: string;
   title: string;
-  /** Copie intégrale du texte de la capture au moment de la conversion. */
+  /**
+   * Description de la tâche : par défaut le texte intégral de la capture, que l'utilisateur peut
+   * réécrire avant de créer la tâche (la capture, elle, n'est jamais modifiée).
+   */
   details: string;
   status: TaskStatus;
   destinationId: string | null;
@@ -150,15 +153,41 @@ export function restoreInboxItem(id: string): Promise<InboxItem> {
 // --- Conversion des captures en tâches (brique 002) ---
 
 /**
+ * Classement de la tâche à la conversion : trois états explicites (« absent » et « aucun » ne se
+ * distinguent pas dans une commande). Changer la destination de la tâche ne change jamais celle
+ * de la capture.
+ */
+export type DestinationChoice =
+  | { type: "keep" }
+  | { type: "clear" }
+  | { type: "set"; id: string };
+
+/** Brouillon de tâche (003-A) : tout est facultatif, un champ absent reprend la capture. */
+export interface TaskDraftInput {
+  /** Description : absente = texte intégral de la capture. Ne peut pas être vide (schéma actuel). */
+  details?: string;
+  /** Absente = destination de la capture. */
+  destination?: DestinationChoice;
+}
+
+/**
  * Transforme une capture en tâche. `expectedUpdatedAt` : la version enregistrée vue par
- * l'utilisateur. `title` : `null` utilise le titre proposé par Rust.
+ * l'utilisateur. `title` : `null` utilise le titre proposé par Rust. `draft` : description et
+ * classement saisis dans la modale.
  */
 export function convertInboxItemToTask(
   id: string,
   expectedUpdatedAt: number,
   title: string | null,
+  draft: TaskDraftInput = {},
 ): Promise<Conversion> {
-  return call("convert_inbox_item_to_task", { id, expectedUpdatedAt, title });
+  return call("convert_inbox_item_to_task", {
+    id,
+    expectedUpdatedAt,
+    title,
+    details: draft.details,
+    destination: draft.destination,
+  });
 }
 
 /** Annule la conversion : la capture revient dans la boîte, la tâche est conservée. */

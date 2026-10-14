@@ -1,6 +1,6 @@
 # M'Organiser
 
-**Statut : briques 000 et 001-A validées ; 001-B (fiche, modification, corbeille, « Voir tout ») implémentée, en cours de validation.**  
+**Statut : briques 000, 001 et 002 validées et fusionnées dans `main` ; brique 003 en cadrage documentaire (003-0), aucun développement.**  
 **Plateforme cible : Windows, en premier.**  
 **Pile : Tauri 2 + React + TypeScript + Rust.**  
 **Méthode : une brique fonctionnelle à la fois.**
@@ -39,7 +39,10 @@ M'Organiser est un centre de contrôle personnel : il doit aider à capturer, or
 - `docs/07_JOURNAL_DEVELOPPEMENT.md` : journal chronologique.
 - `docs/08_COLLABORATION.md` : règles de Claude, Codex et revue humaine.
 - `docs/09_DECISIONS_OUVERTES.md` : décisions actées et sujets à arbitrer.
+- `docs/10_TABLEAU_DE_BORD.md` : spécification du futur tableau de bord, de Capture & Idées et de Ma synthèse (non développé).
 - `docs/briques/BRIQUE_000_FONDATIONS.md` : fondations techniques (structure, Dev/Stable, commandes).
 - `docs/briques/BRIQUE_001_CAPTURE_RAPIDE.md` : spécification de la première fonctionnalité.
+- `docs/briques/BRIQUE_002_VIE_ELEMENT_CAPTURE.md` : transformation d'une capture en tâche (conversion, traitées, sauvegarde avant migration).
+- `docs/briques/BRIQUE_003_FICHE_TACHE_ENRICHIE.md` : cadrage 003-0 de la fiche de tâche enrichie et de la grande modale (documentation, non développé).
 
 **Ne pas présenter une maquette ou un exemple comme une fonctionnalité déjà implémentée.**

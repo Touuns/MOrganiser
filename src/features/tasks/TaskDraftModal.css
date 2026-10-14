@@ -1,0 +1,43 @@
+.task-draft__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.task-draft__title {
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+}
+
+.task-draft__badge {
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  font-size: var(--text-xs);
+}
+
+.task-draft__lead {
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+/* Avertissement : toujours visible (hors de la zone défilante), jamais une seconde modale. */
+.task-draft__leave {
+  padding: var(--space-3) var(--space-4) 0;
+}
+
+.task-draft__message {
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  background: var(--color-env-dev-bg);
+  color: var(--color-env-dev-text);
+  font-size: var(--text-sm);
+}
+
+.task-draft__hint {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}

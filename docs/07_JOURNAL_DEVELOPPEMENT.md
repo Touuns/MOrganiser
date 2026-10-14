@@ -380,6 +380,33 @@
 - **Données :** aucune base Dev ou Stable réelle lue, copiée, ouverte ou migrée ; application non lancée.
 - **Validation du propriétaire :** en attente.
 
+## 2026-10-14 — Cadrage 003-0 : formalisation des décisions UX et de l'architecture fonctionnelle
+
+- **Objectif :** consigner dans la documentation la vision validée (grande fiche modale, brouillon, captures transformées, univers Tous / Moi / Externe, rubriques ouvertes, futur tableau de bord, Ma synthèse, relations, calendrier externe) et préparer le découpage de la brique 003. **Documentation seulement.**
+- **Décisions consignées :** voir `docs/09_DECISIONS_OUVERTES.md` (entrée du 2026-10-14) et `docs/briques/BRIQUE_003_FICHE_TACHE_ENRICHIE.md`.
+- **Fichiers créés :** `docs/briques/BRIQUE_003_FICHE_TACHE_ENRICHIE.md`, `docs/10_TABLEAU_DE_BORD.md`.
+- **Fichiers modifiés (annotations, rien d'effacé) :** `docs/00_VISION.md`, `01_CAHIER_DES_CHARGES.md` (+ §N calendrier externe), `02_UI_UX.md`, `03_ARCHITECTURE.md` (notions indépendantes, relations), `04_SECURITE.md`, `05_ROADMAP.md`, `09_DECISIONS_OUVERTES.md`, `briques/BRIQUE_002_VIE_ELEMENT_CAPTURE.md` (statuts de PR corrigés + note d'évolution), `README.md` (index et statut).
+- **Fonctionnement expliqué simplement :** rien ne change dans l'application. Les documents décrivent désormais ce qui est décidé, ce qui est seulement proposé et ce qui reste à trancher ; une grande fiche modale en brouillon remplacera plus tard le petit panneau de conversion, et le tableau de bord complet est spécifié mais pas développé.
+- **Tests exécutés / résultats réels :** aucun (aucun code ni configuration touché ; les suites interface et Rust n'ont pas été relancées).
+- **Diagnostic Codex (si demandé, lecture seule) :** non demandé.
+- **Problèmes connus / limites :** les arbitrages Q1 à Q16 (fiche 003, §11) et ceux du tableau de bord (fiche `10`, §12) restent ouverts. Le schéma SQL de la tâche enrichie et celui des relations ne sont **pas** décidés. Les lignes d'état de `BRIQUE_000_FONDATIONS.md` et de l'« Étape 0 » de la roadmap (« validation du propriétaire en attente ») sont probablement périmées : non modifiées, hors périmètre de cette intervention.
+- **Données :** aucune base ni sauvegarde réelle lue, copiée ou migrée ; application non lancée.
+- **Validation du propriétaire :** en attente.
+- **Prochaine étape :** arbitrage des questions à trancher avant 003-A (Q1, Q4, Q5, Q11 de la fiche 003), puis spécification détaillée de 003-A.
+
+## 2026-10-14 — Brique 003-A : grande modale et conversion par brouillon (branche `brique-003a-modale-brouillon`)
+
+- **Objectif :** « Transformer en tâche » ouvre une grande modale préremplie (titre, description, classement) ; aucune tâche n'existe avant « Créer la tâche ». Sans migration.
+- **Décisions du propriétaire :** Q1 (modale d'abord), Q4 (mécanisme d'annulation de 002 conservé), Q5 (étape explicite avant transformation), Q11 (comportement de la modale, aucun abandon par clic sur le fond).
+- **Fichiers :** voir la fiche 003, section 14. Rust : `tasks.rs`, `commands.rs`, `tasks/tests.rs`. Interface : `Modal`, `TaskEditor`, `TaskDraftModal`, `CaptureDetail`, `api`, `fakeBackend`, `tokens.css`, `setup.ts`, tests.
+- **Fonctionnement expliqué simplement :** le petit panneau de conversion est remplacé par une vraie fenêtre modale. On y corrige le titre, la description et le classement ; rien n'est écrit tant qu'on n'a pas cliqué « Créer la tâche ». La capture d'origine n'est jamais modifiée. Un brouillon modifié est protégé (avertissement dans la modale) ; un clic à côté de la modale ne fait rien.
+- **Tests :** `cargo test` 164 réussis + 3 ignorés par conception ; `cargo clippy` 0 avertissement ; `vitest` 270/270 ; `pnpm typecheck` et `pnpm build` propres ; deux mutations détectées. Vérification visuelle dans Chromium sur un banc d'essai jetable (données fictives, hors dépôt).
+- **Données :** aucune base Dev ou Stable ouverte, lue, copiée ou migrée ; sauvegardes et copie de référence non touchées ; application Tauri non lancée.
+- **Problèmes connus / limites :** voir la fiche 003, section 14 (rendu WebView2 réel non vérifié, flou non mesuré, brouillon en mémoire seulement).
+- **Git :** aucun commit ni push ; les onze `.toml` autogénérés (fins de ligne) laissés tels quels.
+- **Validation du propriétaire :** Brique 003-A : validation manuelle positive par le propriétaire sur M'Organiser Dev, le 14 octobre 2026. Ergonomie et parcours seulement ; pas une revue indépendante complète du code. Intégration Git en attente.
+- **Prochaine étape :** 003-B (modèle enrichi, migration 0003), après arbitrages Q2, Q3, Q8, Q9, Q13.
+
 ## Modèle à recopier après chaque brique
 
 ### AAAA-MM-JJ — Brique XXX : [nom]

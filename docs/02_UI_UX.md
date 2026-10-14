@@ -7,10 +7,12 @@
 - Alignements, typographie, contrastes et espacement consistants. Icônes compréhensibles, animations rares et motivées par un déplacement réel d'information.
 - Les modules peuvent avoir des présentations spécialisées (inventaire illustré, tâches structurées, finances tabulaires) mais les interactions essentielles restent cohérentes.
 
+> **Évolution décidée le 2026-10-14 (cadrage 003-0).** Le tableau de bord complet, ses deux présentations (Épurée / Connectée), « Ma synthèse », l'espace « Capture & Idées » et les cartes de rubriques sont spécifiés dans `10_TABLEAU_DE_BORD.md`, qui fait foi pour l'accueil complet. Les sections « Accueil compact » et « Tableau de bord étendu » ci-dessous sont **conservées pour l'historique** et annotées là où elles évoluent. Rien de cela n'est développé : l'accueil actuel reste le prototype de la brique 001.
+
 ## Accueil compact au démarrage
 
 - Fenêtre compacte Windows affichée à l'ouverture de session ; zone de capture directement visible.
-- Liste personnelle : 2–5 prochaines actions pertinentes, éventuellement un sous-ensemble des engagements externes et alertes.
+- Liste personnelle : 2–5 prochaines actions pertinentes, éventuellement un sous-ensemble des engagements externes et alertes. *(À faire évoluer : le compact privilégie désormais la capture rapide et l'accès aux éléments à traiter ; la présence de prochaines actions est À DÉCIDER — `10_TABLEAU_DE_BORD.md`, section 10.)*
 - Accès immédiat au mode étendu et aux modules ; ne pas occuper inutilement l'écran.
 
 ## Tableau de bord étendu
@@ -21,6 +23,7 @@ Ordre de lecture suggéré, à tester sur prototype :
 2. **Boîte « À organiser » juste au-dessus de la capture rapide** (ensemble vertical ; décision du 2026-10-10, remplace « côte à côte »). Sous le champ : « Destination (facultatif) », jamais appelé « Tags ».
 3. **Mes tâches personnelles** : vraies tâches identifiables, statuts et prochaine action.
 4. **Engagements externes** : vraies tâches distinctes.
+   *(Points 3 et 4 précisés le 2026-10-14 : Moi / Externe forment un filtre transversal Tous / Moi / Externe, pas deux colonnes permanentes ; voir `10_TABLEAU_DE_BORD.md`, section 4.)*
 5. En attente / échéances critiques et informations utiles ; statistiques discrètes.
 6. Accès aux modules : tâches, personnes, inventaire, notes, finances, projets et loisirs futur.
 
@@ -32,6 +35,7 @@ En fenêtre moins large, réorganiser les sections en colonnes verticales sans p
 - Les espaces « Moi » et « Externe » filtrent un socle commun ; les modules ouvrent des vues spécialisées.
 - Sections de tableau de bord repliables/masquables, réglages mémorisés.
 - Deux styles de création : saisie libre instantanée et formulaire volontairement ouvert à la demande.
+- **Grande fiche modale (décidé le 2026-10-14, brique 003) :** la fiche complète d'une tâche s'ouvre dans une grande fenêtre modale centrée, avec arrière-plan assombri et légèrement flouté, et non comme une page qui remplace l'application. Ce n'est pas un « popup permanent » : elle est ouverte volontairement et se ferme à tout moment, sous réserve de la protection du brouillon. Spécification : `briques/BRIQUE_003_FICHE_TACHE_ENRICHIE.md`, section 5.
 
 ## Animation de capture (spécification d'intention)
 
