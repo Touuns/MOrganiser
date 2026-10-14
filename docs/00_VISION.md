@@ -12,6 +12,7 @@ Le programme doit permettre de : **capturer → clarifier → organiser → agir
 2. **Complexité interne, simplicité visuelle :** les détails existent mais ne sont affichés que lorsqu'ils sont utiles.
 3. **Actions concrètes d'abord :** le tableau de bord montre les tâches et leur prochaine étape, pas de grosses cartes de compteurs.
 4. **Deux univers clairement séparés :** « Moi » (prioritaire à importance comparable) et « Externe » (famille, proches, services). Les deux sont visibles sur l'accueil.
+   > **Précisé le 2026-10-14 (cadrage 003-0) :** Moi et Externe sont une **dimension transversale de classement et de filtrage** (Tous / Moi / Externe), pas deux colonnes permanentes ; « Moi » n'implique pas une priorité élevée ni « Externe » une priorité faible (la priorité est une information distincte). Détail : `docs/10_TABLEAU_DE_BORD.md`, section 4.
 5. **Donnée unique, vues multiples :** une personne, un objet, une tâche ou une dépense peut être relié à d'autres éléments sans ressaisie inutile.
 6. **Pas d'IA au départ :** le logiciel entier doit être exploitable indépendamment de l'intelligence artificielle.
 7. **Local-first :** données personnelles conservées sur la machine au début ; aucun hébergement de données privées dans GitHub.

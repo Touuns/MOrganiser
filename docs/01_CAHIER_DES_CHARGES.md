@@ -18,6 +18,7 @@
 
 - Priorité au contenu des tâches et à la prochaine action, **pas** aux tuiles de compteurs.
 - Deux sections simultanément visibles : **Mes tâches personnelles** et **Engagements externes**.
+  > **Précisé le 2026-10-14 (cadrage 003-0) :** Moi et Externe ne sont **pas** deux colonnes permanentes ; ce sont un filtre transversal **Tous / Moi / Externe** (priorité indépendante de l'univers). Voir `10_TABLEAU_DE_BORD.md`, sections 2 et 4.
 - Autres espaces contextuels : attente, échéances, capture, boîte « À organiser », informations financières utiles.
 - Grand écran : sections lisibles, alignement rigoureux, espacement généreux ; sections repliables ou masquables ; personnalisation progressive.
 - Petit écran : les mêmes données dans une disposition compacte et adaptée.
@@ -30,6 +31,7 @@
 - Une capture non classée entre dans une boîte « À organiser », **pas automatiquement dans les tâches**.
 - **Destination facultative unique** (ce n'est **pas** un tag) : l'espace de responsabilité (Moi, Externe) ou la rubrique (Administratif, Finances, Inventaire) où l'élément sera traité. La capture reste dans « À organiser », filtrable par destination ; un seul enregistrement, jamais de copie. Détails : `briques/BRIQUE_001_CAPTURE_RAPIDE.md`.
 - L'élément peut ensuite devenir tâche, note, projet, objet d'inventaire, etc. sans perte de contenu.
+- **Capture & Idées (précisé le 2026-10-14)** : espace commun qui regroupe la capture rapide, les informations en attente de traitement et l'accès aux captures récentes ; une idée non traitée n'est **pas** une rubrique métier, et une capture n'est pas toujours une « idée ». Une capture transformée quitte la liste des éléments à traiter ; à la clôture de sa tâche, elle disparaît des vues courantes sans suppression physique. Détail : `10_TABLEAU_DE_BORD.md` section 3 et `briques/BRIQUE_003_FICHE_TACHE_ENRICHIE.md` section 7.
 - Un élément peut être conservé tel quel pour plus tard.
 - Animation courte et utile : une carte part du champ et **monte** rejoindre la boîte de réception située au-dessus ; ne confirmer l'arrivée qu'après sauvegarde réussie ; version sans animation selon préférence d'accessibilité.
 - La capture restera à terme accessible depuis le téléphone, avec synchronisation (solution à décider).
@@ -54,6 +56,7 @@
 - Répertoire minimal de personnes ; chaque fiche rassemble les liens vers tâches, notes et opérations concernés.
 - Une base commune évite les doublons ; les espaces sont des **vues et filtres de responsabilité**.
 - Mes responsabilités personnelles reçoivent une priorité visuelle à importance comparable ; les urgences externes demeurent visibles.
+- **Précisé le 2026-10-14 :** « Moi » n'implique pas une priorité élevée, « Externe » n'implique pas une priorité faible ; la priorité d'une tâche est une information distincte de l'univers.
 
 ## F. Inventaire — Prévu
 
@@ -105,3 +108,26 @@
 - Exemple guidé ou saisie libre ; exemple ne doit pas polluer les données réelles sans consentement.
 - Passer, reprendre et rejouer un parcours ; centre de découverte par fonctionnalité.
 - Chaque brique documentée avec son scénario pédagogique.
+
+## N. Calendrier externe — Vision future, HORS PÉRIMÈTRE de la brique 003
+
+> Statuts : **VALIDÉ** = volonté confirmée par le propriétaire ; **À DÉCIDER** = nécessite une étude technique dédiée ; **HORS PÉRIMÈTRE** = non développé. Rien ici n'est implémenté.
+
+**VALIDÉ (volonté) :** intégrer d'abord le **calendrier utilisé sur l'iPhone du propriétaire**, en identifiant le **fournisseur réel** (iCloud, Google, Microsoft ou autre) avant tout choix technique.
+
+**Synchronisation souhaitée, bidirectionnelle :**
+
+- consultation des événements ;
+- création et modification ;
+- suppressions ;
+- fonctionnement hors ligne ;
+- détection des conflits, **sans écrasement silencieux** ;
+- gestion des doublons ;
+- confidentialité et sécurité des accès.
+
+**À DÉCIDER (étude dédiée) :** fournisseur réel, protocole, méthode d'authentification, stockage des identifiants, politique de conflit, périmètre des données synchronisées, éventuel agenda interne préalable. **Aucun protocole ni mode d'authentification n'est choisi à ce stade.**
+
+**Contraintes à lever avant tout développement :**
+
+- le fonctionnement initial est **sans réseau** et la politique de contenu interdit tout appel externe (`04_SECURITE.md`) : une telle fonction serait **facultative, explicitement activée par l'utilisateur** et accompagnée d'une revue de sécurité ;
+- elle ne relève pas de la brique 003 ; elle alimentera plus tard la zone « événements et échéances » du tableau de bord (`10_TABLEAU_DE_BORD.md`, section 9).

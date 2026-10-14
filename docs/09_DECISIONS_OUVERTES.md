@@ -4,7 +4,7 @@
 
 - Application Windows d'abord ; au lancement Windows : fenêtre compacte visible, non épinglée.
 - `×` masque vers le tray, `—` minimise, `Quitter` via tray arrête réellement.
-- Tableau de bord développé : tâches personnelles et externes distinctes et visibles ; capture directement visible avec boîte « À organiser » **au-dessus** du champ de capture (décision du 2026-10-10, remplace « adjacente »).
+- Tableau de bord développé : tâches personnelles et externes distinctes et visibles ; capture directement visible avec boîte « À organiser » **au-dessus** du champ de capture (décision du 2026-10-10, remplace « adjacente »). *(Précisé le 2026-10-14 : Moi / Externe forment un filtre transversal Tous / Moi / Externe, non deux colonnes permanentes ; voir l'entrée « Cadrage 003-0 » ci-dessous.)*
 - La capture est une **entrée brute**, non automatiquement classée en tâche.
 - Sobriété visuelle « centre de contrôle », données opérationnelles devant les gros indicateurs.
 - Hiérarchie de sous-tâches et prochaine action visible par défaut ; tris configurables.
@@ -61,6 +61,51 @@
 - **Migrations :** sauvegarde cohérente (`VACUUM INTO`) vérifiée avant toute migration d'une base existante ; échec de sauvegarde = pas de migration ; trois sauvegardes conservées. Aucune migration de Stable ; la base Dev réelle n'est migrée qu'après un essai sur copie isolée, organisé séparément.
 - **Reste ouvert :** stratégie de sauvegarde/restauration **utilisateur** (copie planifiée, export) avant toute donnée réelle dans Stable.
 
+### 2026-10-14 — Cadrage 003-0 : vision UX et architecture fonctionnelle (documentation seulement)
+
+Références : `docs/briques/BRIQUE_003_FICHE_TACHE_ENRICHIE.md` (fiche, avec Q1 à Q16), `docs/10_TABLEAU_DE_BORD.md`, `docs/03_ARCHITECTURE.md` (notions indépendantes, relations), `docs/01_CAHIER_DES_CHARGES.md` §N. **Aucune implémentation.**
+
+**Décidé (validé par le propriétaire)**
+
+- **Transformer en tâche** ouvre directement une **grande fiche modale immersive** (centrée, marges, arrière-plan assombri et légèrement flouté, contenu défilable, en-tête et actions accessibles, clavier et lecteur d'écran, protection du brouillon). **Brouillon : aucune tâche en SQLite avant validation explicite** ; abandon = la capture reste dans « À organiser ».
+- Préremplissage : titre proposé modifiable ; **texte intégral dans une description entièrement modifiable** ; classement repris et modifiable ; champs facultatifs présentés progressivement.
+- La capture d'origine est conservée **discrètement** tant que la tâche est active ; à la clôture elle disparaît des vues courantes et des archives visibles, **sans suppression physique automatique** ; la tâche terminée est conservée. Les invariants de traçabilité et de sécurité de la brique 002 restent en vigueur.
+- **Capture & Idées** : espace d'entrée commun ; une idée non traitée n'est pas une rubrique ; une capture n'est pas toujours une « idée ».
+- **Univers de responsabilité** Tous / Moi / Externe : filtre **transversal**, non deux colonnes permanentes ; priorité indépendante de l'univers. **Remplace** la lecture « deux sections permanentes » des décisions antérieures (textes conservés, annotés).
+- **Rubriques** : liste ouverte (Administratif, Finance, Inventaire… puis Projets, Santé, Apprentissage, Maison, Voyages…) ; **rubrique, type d'élément, responsabilité et état d'avancement sont quatre notions indépendantes** ; pas de doublon physique entre vues. Tout élément n'est pas une tâche.
+- **Tableau de bord complet** = futur accueil principal (brique 006, hérite de la spécification) : navigation/recherche/filtres, Capture & Idées, **Ma synthèse**, cartes de rubriques, événements ; mode compact distinct ; **deux présentations** (Épurée, Connectée) sur les mêmes données ; vue **Connexions** distincte, fondée sur des relations réelles.
+- **Ma synthèse** : sélection contextuelle, règles déterministes, explicables, testables, configurables à terme ; pas d'IA ; pas de score d'urgence ; ouvrir une fiche ≠ progression ; aucun faux signal quand rien n'est à signaler ; masquer / reporter / ne plus afficher sans toucher à la tâche.
+- **Relations bidirectionnelles** : principe consigné (une relation, consultable des deux côtés, symétriques / dirigées) ; **hors brique 003**, schéma non décidé.
+- **Calendrier externe** : vision future (d'abord le calendrier de l'iPhone du propriétaire, fournisseur réel à identifier, synchronisation bidirectionnelle sans écrasement silencieux) ; **hors brique 003**, aucun protocole choisi.
+- Roadmap : numérotation conservée ; **003** = fiche enrichie ; le tableau de bord rejoint la **006** existante ; « Relations / Connexions », modules spécialisés et calendrier sont des briques à numéroter ultérieurement.
+
+**Remplace ou précise (anciens textes conservés et annotés)**
+
+| Ancien texte | Devient |
+|---|---|
+| Fiche 002 §11 : panneau de conversion intégré, texte figé | Modale de brouillon, description et classement modifiables |
+| Fiche 002 §12 : « Traitées » = toutes les conversions actives | Idem, **sans** les captures dont la tâche est terminée |
+| `00`, `01`, `02` : Moi et Externe en deux sections permanentes | Filtre transversal Tous / Moi / Externe |
+| `02` accueil compact : « 2–5 prochaines actions » | Capture rapide et éléments à traiter en priorité ; prochaines actions : à décider |
+
+**Validé le 2026-10-14 pour 003-A** (voir fiche 003, §14) : Q1 modale d'abord, sans migration · Q4 mécanisme d'annulation de 002 conservé · Q5 étape explicite avant transformation · Q11 comportement de la modale. Validation manuelle positive sur Dev ; intégration Git en attente.
+
+**À arbitrer (proposition de l'assistant dans la fiche 003, §11)**
+
+Ordre des sous-briques (proposé : modale sans migration d'abord) · description vide autorisée (reconstruction de `tasks`) · deux dimensions univers + rubrique : dans 003-B ou 004 · notification « Annuler » après fiche complète et garde d'annulation · capture modifiée non enregistrée au clic « Transformer » · persistance du brouillon · accès à l'origine depuis une tâche terminée · dates (jour calendaire, date de réalisation modifiable) · priorité · événements d'historique · clic sur le fond de la modale, largeur et plein cadre · fiche d'une capture : panneau ou modale · création directe de tâche dans 003 · vue de récupération des tâches annulées · libellés « Capture & Idées » · transitions de statut.
+
+**À arbitrer (tableau de bord, `10`, section 12)**
+
+Rubriques activées par défaut et nom « Finance(s) » · prochaines actions en compact · nombre d'éléments, « progression significative » et donnée de relance de Ma synthèse · **réapparition d'une alerte critique masquée** (question ouverte conservée) · réorganisation accessible des cartes · noms et styles des présentations · agenda interne avant calendrier externe.
+
+**Contradictions et risques consignés (non résolus silencieusement)**
+
+- Destination unique (décision 2026-10-10) ↔ deux dimensions pour une tâche : le champ de nature enregistré en 001 prévoyait cette évolution ; le schéma reste à décider.
+- Garde d'annulation `status = 'todo' AND updated_at = created_at` ↔ création riche directe.
+- Dispositif de répétition de migration limité à v1 → v2 ↔ migration v2 → v3 à répéter.
+- Texte dupliqué (capture + description) ↔ conservation sans suppression automatique.
+- Calendrier externe (réseau, identifiants) ↔ fonctionnement initial sans réseau et CSP stricte.
+
 ## Arbitrages d'avant la brique 001 (clos, sauf la sauvegarde de Stable)
 
 1. ~~Pile technologique Windows~~ → actée le 2026-10-08 (voir ci-dessus).
@@ -69,7 +114,7 @@
 
 ## À arbitrer au fil des briques
 
-- Placement exact, taille et ajustement des panneaux dans le grand tableau de bord.
+- Placement exact, taille et ajustement des panneaux dans le grand tableau de bord (cadrage du 2026-10-14 : `docs/10_TABLEAU_DE_BORD.md`).
 - Heuristique initiale de tri et paramètres d'urgences.
 - Détails des statuts / dépendances / échéances.
 - Modèle d'attachement des notes et documents.

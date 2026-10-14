@@ -45,6 +45,14 @@ Aucun mécanisme n'est ajouté à ce stade. **Avant de stocker des données pers
 - envisager une vérification au démarrage : refuser un dossier de données qui est un point d'analyse (« reparse point »), et comparer les chemins **canoniques** de Dev et Stable ;
 - ne jamais « partager » les données entre Dev et Stable par un lien : copier une sauvegarde dans Dev.
 
+## Intégrations externes futures (calendrier) — HORS PÉRIMÈTRE, conditions préalables
+
+Le calendrier externe (`01_CAHIER_DES_CHARGES.md` §N) imposerait des appels réseau et la conservation d'identifiants, ce qui contredit le fonctionnement initial **sans réseau** et la CSP actuelle (`connect-src` limité à l'IPC). Aucun protocole ni mode d'authentification n'est choisi. Avant tout développement : étude technique dédiée (fournisseur réel, authentification, stockage des secrets), fonction **facultative** activée explicitement, ajustement **justifié et minimal** de la CSP et des permissions, protection contre l'écrasement silencieux, revue de sécurité. Les règles de la section « Commandes Rust et permissions » s'appliquent.
+
+## Migrations de schéma : rappel pour la brique 003
+
+Toute migration de la brique 003 est précédée de la sauvegarde cohérente et vérifiée de la brique 002 (échec = pas de migration) et d'une **répétition sur copie isolée** ; le dispositif actuel de répétition ne gère que v1 → v2 et doit être étendu avant une migration v2 → v3. Une reconstruction de table référencée par une clé étrangère est l'opération la plus risquée prévue (`briques/BRIQUE_003_FICHE_TACHE_ENRICHIE.md`, §8). Aucune migration de Stable sans décision explicite.
+
 ## Verrouillage et chiffrement
 
 - **Verrouillage automatique optionnel, désactivé par défaut.** Possibilité future de déverrouiller par mot de passe ou mécanisme Windows, après inactivité.
