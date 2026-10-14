@@ -97,6 +97,8 @@ fn la_capacite_n_accorde_que_les_permissions_revues() {
             "allow-list-tasks",
             "allow-get-task",
             "allow-list-converted-items",
+            "allow-create-task",
+            "allow-update-task",
             "core:event:allow-listen",
             "core:event:allow-unlisten",
             "core:window:allow-destroy"

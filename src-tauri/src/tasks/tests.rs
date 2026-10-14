@@ -39,7 +39,8 @@ fn snapshot(conn: &Connection) -> String {
     for sql in [
         "SELECT id, content, destination_id, created_at, updated_at, deleted_at, converted_at, converted_task_id
          FROM inbox_items ORDER BY id",
-        "SELECT id, title, details, status, destination_id, origin_inbox_item_id, created_at, updated_at, deleted_at
+        "SELECT id, title, details, status, responsibility_id, section_id, start_date, due_date,
+                completed_on, priority, origin_inbox_item_id, created_at, updated_at, deleted_at
          FROM tasks ORDER BY id",
     ] {
         let mut stmt = conn.prepare(sql).unwrap();
@@ -111,7 +112,9 @@ fn convertir_cree_une_tache_et_garde_la_capture_intacte() {
     assert_eq!(task.title, "Appeler la banque");
     assert_eq!(task.details, "Appeler la banque\nDemander le relevé de mars"); // texte intégral
     assert_eq!(task.status, TaskStatus::Todo);
-    assert_eq!(task.destination_id.as_deref(), Some("finances")); // copiée telle quelle
+    // « finances » est une rubrique : reprise dans sa dimension, l'univers reste vide.
+    assert_eq!(task.section_id.as_deref(), Some("finances"));
+    assert_eq!(task.responsibility_id, None);
     assert_eq!(task.origin_inbox_item_id.as_deref(), Some(item.id.as_str()));
     assert_eq!((task.created_at, task.updated_at), (T0 + 10, T0 + 10));
     assert_eq!(task.deleted_at, None);
@@ -152,14 +155,16 @@ fn la_capture_quitte_la_boite_et_rejoint_les_traitees() {
 }
 
 #[test]
-fn la_destination_est_copiee_sans_interpretation() {
+fn la_destination_est_repartie_selon_sa_nature_sans_rien_inventer() {
     let conn = db();
     let none = capture(&conn, "Sans destination", None, 1);
     let inv = capture(&conn, "Vendre la console", Some("inventaire"), 2);
     let moi = capture(&conn, "Pour moi", Some("moi"), 3);
-    assert_eq!(convert(&conn, &none, 10).unwrap().task.destination_id, None);
-    assert_eq!(convert(&conn, &inv, 11).unwrap().task.destination_id.as_deref(), Some("inventaire"));
-    assert_eq!(convert(&conn, &moi, 12).unwrap().task.destination_id.as_deref(), Some("moi"));
+    let dims = |t: &Task| (t.responsibility_id.clone(), t.section_id.clone());
+    // Jamais « Moi » par défaut pour une capture non classée.
+    assert_eq!(dims(&convert(&conn, &none, 10).unwrap().task), (None, None));
+    assert_eq!(dims(&convert(&conn, &inv, 11).unwrap().task), (None, Some("inventaire".into())));
+    assert_eq!(dims(&convert(&conn, &moi, 12).unwrap().task), (Some("moi".into()), None));
 }
 
 #[test]
@@ -490,7 +495,17 @@ fn le_declencheur_exige_un_updated_at_strictement_croissant() {
     let message = |r: rusqlite::Result<()>| r.unwrap_err().to_string();
 
     // Champ métier modifié SANS toucher updated_at : refusé, pour chaque champ.
-    for column in ["title = 'X'", "details = 'X'", "status = 'done'", "destination_id = 'moi'"] {
+    for column in [
+        "title = 'X'",
+        "details = 'X'",
+        "status = 'done'",
+        "responsibility_id = 'moi'",
+        "section_id = 'finances'",
+        "start_date = '2026-01-01'",
+        "due_date = '2026-12-31'",
+        "completed_on = '2026-10-14'",
+        "priority = 2",
+    ] {
         let error = message(attempt(&format!("UPDATE tasks SET {column} WHERE id = ?1")));
         assert!(error.contains("updated_at doit croitre"), "{column}: {error}");
     }
@@ -572,7 +587,8 @@ fn le_schema_refuse_les_valeurs_invalides() {
     assert!(insert("", "D", "todo").is_err());
     assert!(insert("   ", "D", "todo").is_err());
     assert!(insert(&"a".repeat(121), "D", "todo").is_err());
-    assert!(insert("T", "", "todo").is_err());
+    assert!(insert("T", "", "todo").is_ok(), "description facultative depuis 003-B");
+    assert!(insert("T", &"a".repeat(10_001), "todo").is_err());
     assert!(insert("T", "D", "inconnu").is_err());
     for status in ["in_progress", "waiting", "blocked", "done"] {
         assert!(insert("T", "D", status).is_ok(), "{status}");
@@ -589,7 +605,8 @@ fn le_format_json_correspond_a_ce_qu_attend_l_interface() {
     let json = serde_json::to_value(&done).unwrap();
     assert_eq!(json["task"]["status"], "todo");
     assert_eq!(json["task"]["originInboxItemId"], item.id);
-    assert_eq!(json["task"]["destinationId"], "moi");
+    assert_eq!(json["task"]["responsibilityId"], "moi");
+    assert_eq!(json["task"]["sectionId"], serde_json::Value::Null);
     assert_eq!(json["task"]["deletedAt"], serde_json::Value::Null);
     assert_eq!(json["item"]["convertedTaskId"], json["task"]["id"]);
     assert_eq!(json["item"]["convertedAt"], T0 + 10);
@@ -789,6 +806,7 @@ fn draft(title: Option<&str>, details: Option<&str>, destination: DestinationCho
         title: title.map(str::to_owned),
         details: details.map(str::to_owned),
         destination,
+        ..ConversionDraft::default()
     }
 }
 
@@ -815,7 +833,9 @@ fn la_description_et_la_destination_saisies_sont_enregistrees_et_la_capture_rest
 
     assert_eq!(done.task.title, "Mon titre");
     assert_eq!(done.task.details, "Description réécrite\n\nAvec un paragraphe");
-    assert_eq!(done.task.destination_id.as_deref(), Some("inventaire"));
+    // `set` d'une rubrique : placée dans sa dimension, l'univers reste vide.
+    assert_eq!(done.task.section_id.as_deref(), Some("inventaire"));
+    assert_eq!(done.task.responsibility_id, None);
     assert_eq!(done.task.status, TaskStatus::Todo);
     // Capture : texte, destination et dates strictement conservés ; seule la conversion est marquée.
     assert_eq!(done.item.content, "Texte original\nsur deux lignes");
@@ -844,7 +864,8 @@ fn sans_description_le_texte_integral_de_la_capture_est_repris() {
     let item = capture(&conn, "Première ligne\nSuite", Some("moi"), 1);
     let done = convert_draft(&conn, &item, &ConversionDraft::default(), 10).unwrap();
     assert_eq!(done.task.details, "Première ligne\nSuite");
-    assert_eq!(done.task.destination_id.as_deref(), Some("moi"));
+    assert_eq!(done.task.responsibility_id.as_deref(), Some("moi"));
+    assert_eq!(done.task.section_id, None);
 }
 
 #[test]
@@ -852,7 +873,7 @@ fn la_destination_peut_etre_retiree_ou_changee_sans_toucher_la_capture() {
     let conn = db();
     let cleared = capture(&conn, "Sans classement", Some("moi"), 1);
     let done = convert_draft(&conn, &cleared, &draft(None, None, DestinationChoice::Clear), 10).unwrap();
-    assert_eq!(done.task.destination_id, None);
+    assert_eq!((done.task.responsibility_id.clone(), done.task.section_id.clone()), (None, None));
     assert_eq!(done.item.destination_id.as_deref(), Some("moi"));
 
     let unclassified = capture(&conn, "Capture libre", None, 2);
@@ -863,24 +884,23 @@ fn la_destination_peut_etre_retiree_ou_changee_sans_toucher_la_capture() {
         11,
     )
     .unwrap();
-    assert_eq!(done.task.destination_id.as_deref(), Some("externe"));
+    assert_eq!(done.task.responsibility_id.as_deref(), Some("externe"));
     assert_eq!(done.item.destination_id, None);
     assert_invariants(&conn);
 }
 
 #[test]
-fn une_description_vide_ou_blanche_est_refusee_sans_rien_modifier() {
+fn une_description_vide_ou_blanche_est_acceptee_depuis_003_b() {
     let conn = db();
-    let item = capture(&conn, "À ne pas perdre", None, 1);
-    for blank in ["", "   ", "\n\t \n"] {
-        let before = snapshot(&conn);
-        let error = convert_draft(&conn, &item, &draft(None, Some(blank), DestinationChoice::Keep), 10)
-            .unwrap_err();
-        assert_eq!(error.code(), "empty_details");
-        assert_eq!(before, snapshot(&conn), "un refus ne modifie rien");
+    for (n, blank) in ["", "   ", "\n\t \n"].into_iter().enumerate() {
+        let item = capture(&conn, "Texte d'origine à conserver", None, n as i64);
+        let done =
+            convert_draft(&conn, &item, &draft(None, Some(blank), DestinationChoice::Keep), 10).unwrap();
+        // Vraiment vide : jamais remplacée par le texte de la capture, qui reste intact.
+        assert_eq!(done.task.details, "");
+        assert_eq!(done.item.content, "Texte d'origine à conserver");
     }
-    // Jamais remplacée en silence par le texte de la capture.
-    assert_eq!(count(&conn, "SELECT count(*) FROM tasks"), 0);
+    assert_invariants(&conn);
 }
 
 #[test]
@@ -959,7 +979,7 @@ fn une_destination_inconnue_ou_archivee_est_refusee_une_destination_inchangee_re
         12,
     )
     .unwrap();
-    assert_eq!(kept.task.destination_id.as_deref(), Some("inventaire"));
+    assert_eq!(kept.task.section_id.as_deref(), Some("inventaire"));
     assert_eq!(count(&conn, "SELECT count(*) FROM tasks"), 1);
     assert_invariants(&conn);
 }
@@ -1083,6 +1103,7 @@ fn conversions_simultanees_avec_brouillons_differents_une_seule_tache() {
                     title: Some(format!("Titre {n}")),
                     details: Some(format!("Description {n}")),
                     destination: DestinationChoice::Set { id: "externe".into() },
+                    ..ConversionDraft::default()
                 };
                 barrier.wait();
                 convert_item_with(&conn, &id, item.updated_at, &d, T0 + 10 + n as i64).map(|c| c.task)
@@ -1105,7 +1126,7 @@ fn conversions_simultanees_avec_brouillons_differents_une_seule_tache() {
     assert_eq!(stored, *winners[0]);
     assert!(stored.title.starts_with("Titre ") && stored.details.starts_with("Description "));
     assert_eq!(stored.title.trim_start_matches("Titre "), stored.details.trim_start_matches("Description "));
-    assert_eq!(stored.destination_id.as_deref(), Some("externe"));
+    assert_eq!(stored.responsibility_id.as_deref(), Some("externe"));
     assert_eq!(inbox::get_item(&conn, &item.id).unwrap().content, "Course avec brouillons");
     assert_invariants(&conn);
 }
@@ -1137,4 +1158,574 @@ fn les_nouveaux_messages_d_erreur_ne_reprennent_pas_le_texte_saisi() {
     assert!(!message.contains("MOT-DE-PASSE") && !message.contains("Secret"));
     let unknown = serde_json::to_value(TaskError::UnknownDestination).unwrap();
     assert_eq!(unknown["code"], "unknown_destination");
+}
+
+// --- 003-B1b : modèle enrichi, création directe, modification --------------------------------
+
+fn fields(title: &str) -> TaskFields {
+    TaskFields { title: title.to_owned(), ..TaskFields::default() }
+}
+
+fn create(conn: &Connection, f: &TaskFields, at: i64) -> Result<Task, TaskError> {
+    create_task(conn, f, T0 + at)
+}
+
+#[test]
+fn creation_directe_sans_capture_ni_provenance_inventee() {
+    let conn = db();
+    let before_items = count(&conn, "SELECT count(*) FROM inbox_items");
+    let task = create(&conn, &fields("Appeler le plombier"), 10).unwrap();
+
+    assert_eq!(task.title, "Appeler le plombier");
+    assert_eq!(task.details, ""); // description facultative
+    assert_eq!(task.status, TaskStatus::Todo);
+    assert_eq!(task.origin_inbox_item_id, None, "aucune capture inventée");
+    assert_eq!((task.created_at, task.updated_at, task.deleted_at), (T0 + 10, T0 + 10, None));
+    assert_eq!(
+        (&task.responsibility_id, &task.section_id, &task.start_date, &task.due_date, &task.completed_on, task.priority),
+        (&None, &None, &None, &None, &None, None),
+        "aucune valeur par défaut inventée (ni « Moi », ni priorité normale)"
+    );
+    assert_eq!(uuid::Uuid::parse_str(&task.id).unwrap().get_version_num(), 7);
+    assert_eq!(count(&conn, "SELECT count(*) FROM inbox_items"), before_items, "aucune capture créée");
+    assert_eq!(count(&conn, "SELECT count(*) FROM tasks WHERE origin_inbox_item_id IS NOT NULL"), 0);
+    assert_invariants(&conn);
+}
+
+#[test]
+fn une_tache_creee_directement_n_est_pas_annulable_comme_une_conversion() {
+    let conn = db();
+    let task = create(&conn, &fields("Directe"), 10).unwrap();
+    // Pas de capture à remettre dans la boîte : le mécanisme d'annulation de conversion la refuse.
+    assert_eq!(cancel_conversion(&conn, &task.id, T0 + 20).unwrap_err().code(), "no_origin");
+}
+
+#[test]
+fn univers_et_rubrique_sont_independants_et_facultatifs() {
+    let conn = db();
+    let both = TaskFields {
+        responsibility_id: Some("externe".into()),
+        section_id: Some("administratif".into()),
+        ..fields("Externe + Administratif")
+    };
+    let task = create(&conn, &both, 10).unwrap();
+    assert_eq!(task.responsibility_id.as_deref(), Some("externe"));
+    assert_eq!(task.section_id.as_deref(), Some("administratif"));
+
+    let only_section = TaskFields { section_id: Some("finances".into()), ..fields("Rubrique seule") };
+    let t2 = create(&conn, &only_section, 11).unwrap();
+    assert_eq!((t2.responsibility_id, t2.section_id.as_deref()), (None, Some("finances")));
+    let only_resp = TaskFields { responsibility_id: Some("moi".into()), ..fields("Univers seul") };
+    let t3 = create(&conn, &only_resp, 12).unwrap();
+    assert_eq!((t3.responsibility_id.as_deref(), t3.section_id), (Some("moi"), None));
+    // Une chaîne vide équivaut à « aucun » (jamais un identifiant « » à résoudre).
+    let blank = TaskFields { responsibility_id: Some(String::new()), ..fields("Vide") };
+    assert_eq!(create(&conn, &blank, 13).unwrap().responsibility_id, None);
+}
+
+#[test]
+fn la_nature_des_destinations_est_verifiee_cote_rust_et_cote_sql() {
+    let conn = db();
+    let before = snapshot(&conn);
+    // Rubrique dans l'univers, univers dans la rubrique, destination inconnue ou archivée.
+    for (f, code) in [
+        (TaskFields { responsibility_id: Some("finances".into()), ..fields("T") }, "destination_kind"),
+        (TaskFields { section_id: Some("moi".into()), ..fields("T") }, "destination_kind"),
+        (TaskFields { section_id: Some("inconnue".into()), ..fields("T") }, "unknown_destination"),
+    ] {
+        assert_eq!(create(&conn, &f, 10).unwrap_err().code(), code);
+    }
+    conn.execute("UPDATE destinations SET archived_at = 1 WHERE id = 'externe'", []).unwrap();
+    let archived = TaskFields { responsibility_id: Some("externe".into()), ..fields("T") };
+    assert_eq!(create(&conn, &archived, 11).unwrap_err().code(), "unknown_destination");
+    assert_eq!(before, snapshot(&conn), "un refus ne modifie rien");
+
+    // Défense en profondeur : le schéma refuse aussi, même en contournant Rust.
+    let direct = |col: &str, value: &str| {
+        conn.execute(
+            &format!(
+                "INSERT INTO tasks (id, title, {col}, created_at, updated_at) VALUES ('x{col}', 'T', ?1, 1, 1)"
+            ),
+            [value],
+        )
+    };
+    assert!(direct("responsibility_id", "finances").is_err());
+    assert!(direct("section_id", "moi").is_err());
+    assert!(direct("section_id", "inconnue").is_err());
+}
+
+#[test]
+fn les_dates_sont_validees_format_calendrier_et_coherence() {
+    let conn = db();
+    let with = |start: Option<&str>, due: Option<&str>| TaskFields {
+        start_date: start.map(str::to_owned),
+        due_date: due.map(str::to_owned),
+        ..fields("Dates")
+    };
+    // Valides, y compris le 29 février d'une année bissextile et début = échéance.
+    assert!(create(&conn, &with(Some("2026-10-01"), Some("2026-10-14")), 1).is_ok());
+    assert!(create(&conn, &with(None, Some("2028-02-29")), 2).is_ok());
+    assert!(create(&conn, &with(Some("2026-10-14"), Some("2026-10-14")), 3).is_ok());
+    assert!(create(&conn, &with(Some("2026-10-14"), None), 4).is_ok());
+
+    let before = snapshot(&conn);
+    for bad in [
+        "2026-02-30", "2027-02-29", "2026-13-01", "2026-00-10", "2026-10-00", "2026-10-32", "2026-2-3",
+        "26-10-14", "14/10/2026", "2026-10-14T10:00", "2026-10-14 ", " 2026-10-14", "", "aaaa-bb-cc",
+        "２０２６-10-14", "0000-01-01", "2026-10-1４",
+    ] {
+        assert_eq!(create(&conn, &with(None, Some(bad)), 5).unwrap_err().code(), "invalid_date", "{bad:?}");
+        assert_eq!(create(&conn, &with(Some(bad), None), 5).unwrap_err().code(), "invalid_date", "{bad:?}");
+    }
+    // Début postérieur à l'échéance : interdit (Rust) ; le schéma l'interdit aussi.
+    assert_eq!(
+        create(&conn, &with(Some("2026-10-15"), Some("2026-10-14")), 6).unwrap_err().code(),
+        "dates_incoherent"
+    );
+    assert_eq!(before, snapshot(&conn));
+    assert!(conn
+        .execute(
+            "INSERT INTO tasks (id, title, start_date, due_date, created_at, updated_at)
+             VALUES ('inco', 'T', '2026-10-15', '2026-10-14', 1, 1)",
+            [],
+        )
+        .is_err());
+}
+
+#[test]
+fn rust_et_sqlite_s_accordent_sur_les_dates_valides() {
+    // Tout ce que Rust accepte, le CHECK du schéma l'accepte ; et inversement pour les dates réelles.
+    let conn = db();
+    let sqlite_accepts = |value: &str| -> bool {
+        conn.execute(
+            "INSERT INTO tasks (id, title, due_date, created_at, updated_at) VALUES (hex(randomblob(8)), 'T', ?1, 1, 1)",
+            [value],
+        )
+        .is_ok()
+    };
+    for value in [
+        "2026-10-14", "2024-02-29", "2100-02-28", "2100-02-29", "2000-02-29", "1999-12-31", "9999-12-31",
+        "2026-04-31", "2026-06-31", "2026-02-30", "2026-1-01", "abcd-ef-gh", "2026-10-14 00:00:00",
+    ] {
+        if is_valid_calendar_date(value) {
+            assert!(sqlite_accepts(value), "Rust accepte {value:?} mais pas SQLite");
+        } else if value.len() == 10 && !value.contains(char::is_alphabetic) {
+            assert!(!sqlite_accepts(value), "SQLite accepte {value:?} que Rust refuse");
+        }
+    }
+}
+
+#[test]
+fn la_priorite_est_absente_par_defaut_et_limitee_aux_niveaux_disponibles() {
+    let conn = db();
+    let none = create(&conn, &fields("Sans priorité"), 1).unwrap();
+    assert_eq!(none.priority, None); // jamais « normale » par défaut
+    for level in [1, 2, 3] {
+        let f = TaskFields { priority: Some(level), ..fields("P") };
+        assert_eq!(create(&conn, &f, 2).unwrap().priority, Some(level));
+    }
+    // Niveaux réservés (4, 5) et hors bornes : refusés côté Rust.
+    for level in [0, 4, 5, 6, -1, 100] {
+        let f = TaskFields { priority: Some(level), ..fields("P") };
+        assert_eq!(create(&conn, &f, 3).unwrap_err().code(), "invalid_priority", "{level}");
+    }
+    // Le schéma garde 1 à 5 (évolution future sans reconstruction).
+    for (level, ok) in [(4, true), (5, true), (6, false), (0, false)] {
+        let r = conn.execute(
+            "INSERT INTO tasks (id, title, priority, created_at, updated_at)
+             VALUES (hex(randomblob(8)), 'T', ?1, 1, 1)",
+            [level],
+        );
+        assert_eq!(r.is_ok(), ok, "{level}");
+    }
+}
+
+#[test]
+fn titre_et_description_sont_valides_a_la_creation() {
+    let conn = db();
+    for (title, code) in [("", "empty_title"), ("   \n ", "empty_title")] {
+        assert_eq!(create(&conn, &fields(title), 1).unwrap_err().code(), code);
+    }
+    assert_eq!(create(&conn, &fields(&"a".repeat(121)), 1).unwrap_err().code(), "title_too_long");
+    let long = TaskFields { details: "é".repeat(10_001), ..fields("T") };
+    assert_eq!(create(&conn, &long, 1).unwrap_err().code(), "details_too_long");
+    let exact = TaskFields { details: "é".repeat(10_000), ..fields("T") };
+    assert_eq!(create(&conn, &exact, 2).unwrap().details.chars().count(), 10_000);
+    // Espaces et retours normalisés dans le titre ; description nettoyée aux extrémités seulement.
+    let messy = TaskFields { details: "  a\n\n  b  ".into(), ..fields("  Mon   titre\n ici ") };
+    let task = create(&conn, &messy, 3).unwrap();
+    assert_eq!((task.title.as_str(), task.details.as_str()), ("Mon titre ici", "a\n\n  b"));
+}
+
+#[test]
+fn modifier_une_tache_applique_les_champs_et_fait_croitre_updated_at() {
+    let conn = db();
+    let task = create(&conn, &fields("Avant"), 10).unwrap();
+    let f = TaskFields {
+        title: "Après".into(),
+        details: "Nouvelle description".into(),
+        responsibility_id: Some("moi".into()),
+        section_id: Some("finances".into()),
+        start_date: Some("2026-10-01".into()),
+        due_date: Some("2026-10-31".into()),
+        priority: Some(3),
+    };
+    let updated = update_task(&conn, &task.id, task.updated_at, &f, T0 + 20).unwrap();
+    assert_eq!(updated.title, "Après");
+    assert_eq!(updated.details, "Nouvelle description");
+    assert_eq!((updated.responsibility_id.as_deref(), updated.section_id.as_deref()), (Some("moi"), Some("finances")));
+    assert_eq!((updated.start_date.as_deref(), updated.due_date.as_deref(), updated.priority), (Some("2026-10-01"), Some("2026-10-31"), Some(3)));
+    assert_eq!(updated.updated_at, T0 + 20);
+    // Inchangés : identité, provenance, statut, date de réalisation, création, suppression.
+    assert_eq!(updated.id, task.id);
+    assert_eq!(updated.status, TaskStatus::Todo);
+    assert_eq!(updated.origin_inbox_item_id, None);
+    assert_eq!((updated.completed_on, updated.created_at, updated.deleted_at), (None, task.created_at, None));
+
+    // Horloge qui n'avance pas : `updated_at` croît quand même strictement.
+    let again = TaskFields { title: "Encore".into(), ..f };
+    let third = update_task(&conn, &task.id, updated.updated_at, &again, T0 + 5).unwrap();
+    assert_eq!(third.updated_at, updated.updated_at + 1);
+    assert_invariants(&conn);
+}
+
+#[test]
+fn une_modification_sans_changement_n_ecrit_rien() {
+    let conn = db();
+    let f = TaskFields {
+        details: "Texte".into(),
+        responsibility_id: Some("moi".into()),
+        priority: Some(2),
+        ..fields("Stable")
+    };
+    let task = create(&conn, &f, 10).unwrap();
+    let before = snapshot(&conn);
+    let same = update_task(&conn, &task.id, task.updated_at, &f, T0 + 99).unwrap();
+    assert_eq!(same, task);
+    assert_eq!(before, snapshot(&conn), "aucune écriture, updated_at inchangé");
+    // Même après normalisation (espaces autour) : toujours aucun changement.
+    let spaced = TaskFields { title: "  Stable  ".into(), details: "  Texte  ".into(), ..f.clone() };
+    assert_eq!(update_task(&conn, &task.id, task.updated_at, &spaced, T0 + 100).unwrap(), task);
+    assert_eq!(before, snapshot(&conn));
+}
+
+#[test]
+fn le_verrou_optimiste_refuse_une_version_perimee_sans_rien_modifier() {
+    let conn = db();
+    let task = create(&conn, &fields("Version 1"), 10).unwrap();
+    let theirs = update_task(&conn, &task.id, task.updated_at, &fields("Version 2 ailleurs"), T0 + 20).unwrap();
+    let before = snapshot(&conn);
+
+    // L'utilisateur avait ouvert la version 1 : conflit, jamais d'écrasement silencieux.
+    let error = update_task(&conn, &task.id, task.updated_at, &fields("Ma version"), T0 + 30).unwrap_err();
+    assert_eq!(error.code(), "task_version_conflict");
+    assert_eq!(before, snapshot(&conn));
+    assert_eq!(get_task(&conn, &task.id).unwrap().title, "Version 2 ailleurs");
+    // Avec la version actuelle, l'enregistrement réussit.
+    assert!(update_task(&conn, &task.id, theirs.updated_at, &fields("Ma version"), T0 + 30).is_ok());
+}
+
+#[test]
+fn une_tache_annulee_ou_inconnue_ne_se_modifie_pas() {
+    let conn = db();
+    let item = capture(&conn, "À annuler", None, 1);
+    let done = convert(&conn, &item, 10).unwrap();
+    let cancelled = cancel_conversion(&conn, &done.task.id, T0 + 20).unwrap().task;
+    let before = snapshot(&conn);
+    assert_eq!(
+        update_task(&conn, &cancelled.id, cancelled.updated_at, &fields("Nouveau"), T0 + 30)
+            .unwrap_err()
+            .code(),
+        "task_not_active"
+    );
+    assert_eq!(
+        update_task(&conn, "inconnue", 1, &fields("X"), T0 + 30).unwrap_err().code(),
+        "task_not_found"
+    );
+    assert_eq!(before, snapshot(&conn));
+}
+
+#[test]
+fn modifier_une_tache_convertie_garde_sa_provenance_et_bloque_l_annulation() {
+    let conn = db();
+    let item = capture(&conn, "Capture d'origine", Some("finances"), 1);
+    let task = convert(&conn, &item, 10).unwrap().task;
+    let edited = update_task(&conn, &task.id, task.updated_at, &fields("Retouchée"), T0 + 20).unwrap();
+    assert_eq!(edited.origin_inbox_item_id.as_deref(), Some(item.id.as_str()));
+    // Le travail déjà fait n'est pas masqué : la garde de la brique 002 refuse l'annulation.
+    assert_eq!(cancel_conversion(&conn, &task.id, T0 + 30).unwrap_err().code(), "task_modified");
+    // La capture est intacte et toujours « convertie ».
+    let stored = inbox::get_item(&conn, &item.id).unwrap();
+    assert_eq!((stored.content.as_str(), stored.updated_at), ("Capture d'origine", item.updated_at));
+    assert_eq!(stored.converted_task_id.as_deref(), Some(task.id.as_str()));
+    assert_invariants(&conn);
+}
+
+#[test]
+fn modifier_ne_change_jamais_le_statut_ni_la_date_de_realisation() {
+    let conn = db();
+    let task = create(&conn, &fields("Avancée"), 10).unwrap();
+    conn.execute(
+        "UPDATE tasks SET status = 'in_progress', completed_on = '2026-10-01', updated_at = updated_at + 1
+         WHERE id = ?1",
+        [&task.id],
+    )
+    .unwrap();
+    let current = get_task(&conn, &task.id).unwrap();
+    let edited = update_task(&conn, &task.id, current.updated_at, &fields("Avancée (titre)"), T0 + 50).unwrap();
+    assert_eq!(edited.status, TaskStatus::InProgress);
+    assert_eq!(edited.completed_on.as_deref(), Some("2026-10-01"));
+}
+
+#[test]
+fn une_destination_deja_portee_reste_valide_apres_archivage_mais_pas_une_nouvelle() {
+    let conn = db();
+    let f = TaskFields {
+        responsibility_id: Some("externe".into()),
+        section_id: Some("inventaire".into()),
+        ..fields("Classée")
+    };
+    let task = create(&conn, &f, 10).unwrap();
+    conn.execute("UPDATE destinations SET archived_at = 5 WHERE id IN ('externe', 'inventaire', 'finances')", [])
+        .unwrap();
+    // Titre modifié, classement inchangé (archivé) : accepté.
+    let keep = TaskFields { title: "Renommée".into(), ..f.clone() };
+    let updated = update_task(&conn, &task.id, task.updated_at, &keep, T0 + 20).unwrap();
+    assert_eq!(updated.responsibility_id.as_deref(), Some("externe"));
+    assert_eq!(updated.section_id.as_deref(), Some("inventaire"));
+    // Passer à une autre destination archivée : refusé.
+    let other = TaskFields { section_id: Some("finances".into()), ..keep };
+    assert_eq!(
+        update_task(&conn, &task.id, updated.updated_at, &other, T0 + 30).unwrap_err().code(),
+        "unknown_destination"
+    );
+}
+
+#[test]
+fn la_conversion_accepte_dates_priorite_et_classement_en_deux_dimensions() {
+    let conn = db();
+    let item = capture(&conn, "Dossier à compléter", Some("administratif"), 1);
+    let d = ConversionDraft {
+        title: Some("Compléter le dossier".into()),
+        details: Some("Pièces à fournir".into()),
+        destination: DestinationChoice::Split {
+            responsibility_id: Some("externe".into()),
+            section_id: Some("administratif".into()),
+        },
+        start_date: Some("2026-10-14".into()),
+        due_date: Some("2026-11-01".into()),
+        priority: Some(3),
+    };
+    let done = convert_item_with(&conn, &item.id, item.updated_at, &d, T0 + 10).unwrap();
+    let t = &done.task;
+    assert_eq!((t.responsibility_id.as_deref(), t.section_id.as_deref()), (Some("externe"), Some("administratif")));
+    assert_eq!((t.start_date.as_deref(), t.due_date.as_deref(), t.priority), (Some("2026-10-14"), Some("2026-11-01"), Some(3)));
+    assert_eq!(t.status, TaskStatus::Todo);
+    // La capture garde sa destination unique, son texte et sa version.
+    assert_eq!(done.item.destination_id.as_deref(), Some("administratif"));
+    assert_eq!((done.item.content.as_str(), done.item.updated_at), ("Dossier à compléter", item.updated_at));
+    // Créée avec dates et priorité : toujours annulable (updated_at = created_at).
+    assert_eq!(cancel_conversion(&conn, &t.id, T0 + 20).unwrap().item, item);
+    assert_invariants(&conn);
+}
+
+#[test]
+fn la_conversion_refuse_dates_priorite_et_classement_invalides_sans_rien_ecrire() {
+    let conn = db();
+    let item = capture(&conn, "Capture", Some("moi"), 1);
+    let before = snapshot(&conn);
+    let cases = [
+        (ConversionDraft { due_date: Some("2026-02-30".into()), ..ConversionDraft::default() }, "invalid_date"),
+        (
+            ConversionDraft {
+                start_date: Some("2026-10-15".into()),
+                due_date: Some("2026-10-14".into()),
+                ..ConversionDraft::default()
+            },
+            "dates_incoherent",
+        ),
+        (ConversionDraft { priority: Some(4), ..ConversionDraft::default() }, "invalid_priority"),
+        (
+            ConversionDraft {
+                destination: DestinationChoice::Split { responsibility_id: Some("finances".into()), section_id: None },
+                ..ConversionDraft::default()
+            },
+            "destination_kind",
+        ),
+        (
+            ConversionDraft {
+                destination: DestinationChoice::Split { responsibility_id: None, section_id: Some("moi".into()) },
+                ..ConversionDraft::default()
+            },
+            "destination_kind",
+        ),
+    ];
+    for (d, code) in cases {
+        assert_eq!(convert_draft(&conn, &item, &d, 10).unwrap_err().code(), code);
+        assert_eq!(before, snapshot(&conn));
+    }
+}
+
+#[test]
+fn le_choix_de_classement_split_se_lit_au_format_de_l_interface() {
+    let split: DestinationChoice =
+        serde_json::from_str(r#"{"type":"split","responsibilityId":"moi","sectionId":null}"#).unwrap();
+    assert_eq!(
+        split,
+        DestinationChoice::Split { responsibility_id: Some("moi".into()), section_id: None }
+    );
+    let partial: DestinationChoice = serde_json::from_str(r#"{"type":"split","sectionId":"finances"}"#).unwrap();
+    assert_eq!(partial, DestinationChoice::Split { responsibility_id: None, section_id: Some("finances".into()) });
+    // Les trois formes de 003-A restent lisibles telles quelles.
+    for json in [r#"{"type":"keep"}"#, r#"{"type":"clear"}"#, r#"{"type":"set","id":"moi"}"#] {
+        assert!(serde_json::from_str::<DestinationChoice>(json).is_ok(), "{json}");
+    }
+}
+
+#[test]
+fn le_format_json_de_la_tache_enrichie_correspond_a_l_interface() {
+    let conn = db();
+    let f = TaskFields {
+        details: "d".into(),
+        responsibility_id: Some("moi".into()),
+        section_id: Some("finances".into()),
+        start_date: Some("2026-10-01".into()),
+        due_date: Some("2026-10-31".into()),
+        priority: Some(2),
+        ..fields("JSON")
+    };
+    let task = create(&conn, &f, 10).unwrap();
+    let json = serde_json::to_value(&task).unwrap();
+    assert_eq!(json["responsibilityId"], "moi");
+    assert_eq!(json["sectionId"], "finances");
+    assert_eq!(json["startDate"], "2026-10-01");
+    assert_eq!(json["dueDate"], "2026-10-31");
+    assert_eq!(json["completedOn"], serde_json::Value::Null);
+    assert_eq!(json["priority"], 2);
+    assert_eq!(json["originInboxItemId"], serde_json::Value::Null);
+    assert!(json.get("destinationId").is_none(), "l'ancien champ n'existe plus");
+    // Entrée : camelCase, champs facultatifs absents acceptés.
+    let parsed: TaskFields = serde_json::from_str(r#"{"title":"T","dueDate":"2026-10-31"}"#).unwrap();
+    assert_eq!((parsed.details.as_str(), parsed.due_date.as_deref()), ("", Some("2026-10-31")));
+}
+
+#[test]
+fn les_nouveaux_messages_d_erreur_ne_contiennent_aucune_saisie() {
+    let conn = db();
+    let secret = "SECRET-PERSONNEL-9f3";
+    let f = TaskFields {
+        title: secret.into(),
+        section_id: Some(secret.into()),
+        due_date: Some(format!("{secret}-date")),
+        ..TaskFields::default()
+    };
+    let json = |e: TaskError| serde_json::to_string(&e).unwrap();
+    for error in [
+        create(&conn, &f, 1).unwrap_err(),
+        create(&conn, &TaskFields { due_date: None, ..f.clone() }, 1).unwrap_err(),
+        update_task(&conn, secret, 1, &f, 1).unwrap_err(),
+    ] {
+        assert!(!json(error).contains(secret));
+    }
+    let f2 = TaskFields { title: "T".into(), priority: Some(99), ..TaskFields::default() };
+    assert!(!json(create(&conn, &f2, 1).unwrap_err()).contains("99"));
+}
+
+#[test]
+fn modifications_simultanees_une_seule_gagne_et_aucune_n_est_perdue_en_silence() {
+    let (_dir, path) = file_db();
+    let task = {
+        let conn = storage::open(&path).unwrap();
+        create(&conn, &fields("Départ"), 1).unwrap()
+    };
+    const THREADS: usize = 6;
+    let barrier = Arc::new(Barrier::new(THREADS));
+    let handles: Vec<_> = (0..THREADS)
+        .map(|n| {
+            let (path, id, barrier) = (path.clone(), task.id.clone(), barrier.clone());
+            std::thread::spawn(move || {
+                let conn = storage::open(&path).unwrap();
+                let f = TaskFields { title: format!("Titre {n}"), ..TaskFields::default() };
+                barrier.wait();
+                update_task(&conn, &id, task.updated_at, &f, T0 + 10 + n as i64).map(|t| t.title)
+            })
+        })
+        .collect();
+    let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+    let winners: Vec<_> = results.iter().filter_map(|r| r.as_ref().ok()).collect();
+    assert_eq!(winners.len(), 1, "exactement une modification : {results:?}");
+    for result in &results {
+        if let Err(error) = result {
+            assert_eq!(error.code(), "task_version_conflict", "{error:?}");
+        }
+    }
+    let conn = storage::open(&path).unwrap();
+    assert_eq!(&get_task(&conn, &task.id).unwrap().title, winners[0]);
+    assert_invariants(&conn);
+}
+
+#[test]
+fn les_sequences_aleatoires_avec_creation_et_edition_conservent_les_invariants() {
+    let conn = db();
+    let items: Vec<InboxItem> = (0..3).map(|i| capture(&conn, &format!("Capture {i}"), Some("moi"), i)).collect();
+    let mut direct: Vec<Task> = Vec::new();
+    let mut seed: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let mut clock = 100;
+    for step in 0..300 {
+        clock += 1;
+        match next() % 5 {
+            0 => {
+                if let Ok(t) = create(&conn, &fields(&format!("Directe {step}")), clock) {
+                    direct.push(t);
+                }
+            }
+            1 if !direct.is_empty() => {
+                let i = (next() % direct.len() as u64) as usize;
+                let f = TaskFields {
+                    title: format!("Édité {step}"),
+                    due_date: Some(format!("2026-{:02}-{:02}", 1 + step % 12, 1 + step % 28)),
+                    priority: Some(1 + (step % 3) as i64),
+                    ..TaskFields::default()
+                };
+                if let Ok(t) = update_task(&conn, &direct[i].id, direct[i].updated_at, &f, T0 + clock) {
+                    direct[i] = t;
+                }
+            }
+            2 => {
+                let it = &items[(next() % 3) as usize];
+                let cur = inbox::get_item(&conn, &it.id).unwrap();
+                let _ = convert_item(&conn, &it.id, cur.updated_at, None, T0 + clock);
+            }
+            3 => {
+                let it = &items[(next() % 3) as usize];
+                if let Some(id) = inbox::get_item(&conn, &it.id).unwrap().converted_task_id {
+                    let _ = cancel_conversion(&conn, &id, T0 + clock);
+                }
+            }
+            _ => {
+                let it = &items[(next() % 3) as usize];
+                let cur = inbox::get_item(&conn, &it.id).unwrap();
+                if let Some(id) = cur.converted_task_id {
+                    let t = get_task(&conn, &id).unwrap();
+                    let f = TaskFields { title: format!("Retouche {step}"), ..TaskFields::default() };
+                    let _ = update_task(&conn, &id, t.updated_at, &f, T0 + clock);
+                }
+            }
+        }
+        assert_invariants(&conn);
+    }
+    // Les captures ne sont jamais altérées par les éditions de tâches.
+    for it in &items {
+        assert_eq!(inbox::get_item(&conn, &it.id).unwrap().content, it.content);
+    }
+    assert_eq!(
+        count(&conn, "SELECT count(*) FROM tasks WHERE origin_inbox_item_id IS NULL"),
+        direct.len() as i64
+    );
 }

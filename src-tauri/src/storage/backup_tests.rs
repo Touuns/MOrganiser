@@ -97,7 +97,7 @@ fn migration_v1_vers_v2_conserve_toutes_les_donnees() {
 
     let conn = open(&path).unwrap();
 
-    assert_eq!(version(&conn), 2);
+    assert_eq!(version(&conn), SCHEMA_VERSION);
     assert_eq!(dump(&conn, V1_ITEMS), items_before, "captures et métadonnées identiques");
     assert_eq!(dump(&conn, V1_DESTINATIONS), destinations_before, "destinations identiques");
     // Les nouvelles colonnes existent et sont vides : aucune capture n'est « convertie ».
@@ -250,7 +250,7 @@ fn une_base_d_une_version_future_est_refusee_sans_sauvegarde_ni_modification() {
     }
     let bytes_before = fs::read(&path).unwrap();
     let error = open(&path).unwrap_err();
-    assert!(matches!(error, StorageError::NewerSchema { found: 3, supported: 2 }), "{error:?}");
+    assert!(matches!(error, StorageError::NewerSchema { found, supported } if found == SCHEMA_VERSION + 1 && supported == SCHEMA_VERSION), "{error:?}");
     assert_eq!(fs::read(&path).unwrap(), bytes_before);
     assert!(backups_in(&path).is_empty());
     assert!(!backup::backup_dir(&path).exists());
@@ -582,7 +582,7 @@ fn restauration_depuis_une_sauvegarde() {
 
     // 1. L'application migre (sauvegarde automatique), puis l'utilisateur crée une tâche.
     let migrated = open(&path).unwrap();
-    assert_eq!(version(&migrated), 2);
+    assert_eq!(version(&migrated), SCHEMA_VERSION);
     crate::tasks::convert_item(&migrated, "c1", 1_000, None, 20_000).unwrap();
     assert_eq!(dump(&migrated, "SELECT count(*) FROM tasks"), vec![vec![Value::Integer(1)]]);
     drop(migrated); // application fermée
@@ -606,7 +606,7 @@ fn restauration_depuis_une_sauvegarde() {
 
     // 3. Relance : la base restaurée (v1) s'ouvre, est remigrée avec une NOUVELLE sauvegarde.
     let restored = open(&path).unwrap();
-    assert_eq!(version(&restored), 2);
+    assert_eq!(version(&restored), SCHEMA_VERSION);
     assert_eq!(dump(&restored, V1_ITEMS), original_items, "captures d'origine intégralement restaurées");
     assert_eq!(dump(&restored, V1_DESTINATIONS), original_destinations);
     assert_eq!(dump(&restored, "SELECT count(*) FROM tasks"), vec![vec![Value::Integer(0)]]);

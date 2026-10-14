@@ -44,9 +44,8 @@ export function TaskDetail({ task, destinations, onClose, onOpenOrigin }: TaskDe
     }
   }
 
-  const destination = task.destinationId
-    ? (destinations.find((d) => d.id === task.destinationId)?.label ?? task.destinationId)
-    : "Aucune";
+  const labelOf = (id: string | null) =>
+    id === null ? "Aucun" : (destinations.find((d) => d.id === id)?.label ?? id);
 
   return (
     <section className="detail" aria-labelledby={headingId} onKeyDown={handleKeyDown}>
@@ -80,8 +79,10 @@ export function TaskDetail({ task, destinations, onClose, onOpenOrigin }: TaskDe
       <dl className="detail__dates">
         <dt>Statut</dt>
         <dd>{STATUS_LABELS[task.status]}</dd>
-        <dt>Destination</dt>
-        <dd>{destination}</dd>
+        <dt>Univers</dt>
+        <dd>{labelOf(task.responsibilityId)}</dd>
+        <dt>Rubrique</dt>
+        <dd>{labelOf(task.sectionId)}</dd>
         <dt>Créée</dt>
         <dd>
           <time dateTime={new Date(task.createdAt).toISOString()}>{formatLong(task.createdAt)}</time>

@@ -407,6 +407,27 @@
 - **Validation du propriétaire :** Brique 003-A : validation manuelle positive par le propriétaire sur M'Organiser Dev, le 14 octobre 2026. Ergonomie et parcours seulement ; pas une revue indépendante complète du code. Intégration Git en attente.
 - **Prochaine étape :** 003-B (modèle enrichi, migration 0003), après arbitrages Q2, Q3, Q8, Q9, Q13.
 
+## 2026-10-14 — Brique 003-B1b : migration 0003 et modèle de tâche enrichi (branche `brique-003b1a-preuve-migration`)
+
+- **Objectif :** transformer la preuve 003-B1a en migration de production v2 → v3 ; modèle Rust enrichi (description facultative, univers et rubrique indépendants, dates, priorité) ; commandes de création directe et de modification ; contrats TypeScript minimaux. **Aucune migration réelle.**
+- **Décisions du propriétaire :** description facultative ; deux dimensions facultatives ; dates calendaires avec contrôle Rust **et** SQLite (début ≤ échéance) ; priorité 1 à 3 en saisie (schéma 1 à 5) ; création directe sans provenance ; corbeille des tâches directes différée.
+- **Fichiers :** voir la fiche 003, section 15. Rust : `migrations/0003_task_model.sql`, `storage/mod.rs`, `tasks.rs`, `commands.rs`, `lib.rs`, `build.rs`, capacité, tests. Interface : `api.ts`, `fakeBackend.ts`, `TaskCard`, `TaskDetail`, `InboxHome`, tests.
+- **Fonctionnement expliqué simplement :** la table des tâches est reconstruite en une seule transaction, avec des contrôles avant et après ; si un seul contrôle échoue, rien n'est modifié. Une tâche peut maintenant porter un univers (Moi / Externe) et une rubrique, des dates et une priorité, et exister sans capture.
+- **Tests :** `cargo test` 211 réussis + 3 ignorés ; `cargo clippy` 0 avertissement ; `vitest` 278/278 ; `pnpm typecheck` et `pnpm build` propres ; migrations testées v1 → v3, v2 → v3, v3 → v3, version future refusée, panne avant chaque étape.
+- **Données :** aucune base Dev ou Stable ouverte, lue ou migrée ; sauvegardes et copie de référence non touchées ; application non lancée.
+- **Attention :** `SCHEMA_VERSION` vaut désormais 3 : lancer Dev sur une base v2 la migrerait automatiquement (après sauvegarde). À ne pas faire avant la répétition 003-B1c.
+- **Validation du propriétaire :** en attente.
+- **Prochaine étape :** 003-B1c (dispositif de répétition v2 → v3), puis 003-B2 (interface).
+
+## 2026-10-14 — Brique 003-B1c : répétition de migration v2 → v3 (branche `brique-003b1a-preuve-migration`)
+
+- **Objectif :** étendre le dispositif de répétition (v1 → v2) à v2 → v3, avec versions explicites, comparaison valeur par valeur et projection indépendante. **Aucune donnée réelle.**
+- **Fichiers :** `storage/rehearsal_tests.rs` (cœur réécrit), `storage/mod.rs` (`open_with`), `storage/rebuild_proof_tests.rs` (aides de fixture), fiche 002 §13 (procédure PowerShell et mise à jour 003-B1c), fiche 003 §16.
+- **Fonctionnement expliqué simplement :** la répétition travaille sur une copie temporaire, demande les versions explicitement, relit tout l'état avant, calcule en Rust ce que la base devrait contenir après, migre la copie, puis compare. Une seule valeur différente fait échouer la répétition, et le message cite l'identifiant et le champ, jamais le texte.
+- **Tests :** `cargo test` 230 réussis + 3 ignorés ; `cargo clippy` 0 avertissement ; procédure PowerShell A/B exécutée sur une base fictive (réussite v2 → v3 ; refus des versions incorrectes). Interface non touchée (non relancée).
+- **Données :** aucune base Dev ou Stable ouverte ; aucune copie ni sauvegarde réelle ; `C:\MOrganiserEssais` non utilisé ; dossier d'essais synthétique supprimé.
+- **Validation du propriétaire :** en attente. **Prochaine étape :** revue, puis autorisations distinctes pour la phase A puis B sur copie réelle (voir fiche 003 §16).
+
 ## Modèle à recopier après chaque brique
 
 ### AAAA-MM-JJ — Brique XXX : [nom]

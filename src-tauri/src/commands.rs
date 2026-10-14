@@ -10,7 +10,9 @@ use tauri::State;
 
 use crate::environment::Channel;
 use crate::inbox::{self, Cursor, Destination, InboxError, InboxFilter, InboxItem, InboxPage, Scope};
-use crate::tasks::{self, Conversion, ConversionDraft, DestinationChoice, Task, TaskError, TaskPage};
+use crate::tasks::{
+    self, Conversion, ConversionDraft, DestinationChoice, Task, TaskError, TaskFields, TaskPage,
+};
 use crate::{AppEnvironment, Database};
 
 /// Informations de diagnostic affichées dans la fenêtre. Lecture seule.
@@ -164,6 +166,9 @@ pub async fn create_inbox_item(
 /// Transforme une capture en tâche à partir du brouillon saisi (003-A). Tout est facultatif :
 /// `title` absent = titre proposé ; `details` absent = texte intégral de la capture ;
 /// `destination` absente = destination de la capture. La capture n'est jamais modifiée.
+// Arguments à plat : le contrat de la commande (003-A) reste lisible côté interface, où chaque
+// champ est facultatif ; les regrouper changerait la forme des appels existants.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn convert_inbox_item_to_task(
     db: State<'_, Database>,
@@ -172,9 +177,36 @@ pub async fn convert_inbox_item_to_task(
     title: Option<String>,
     details: Option<String>,
     destination: Option<DestinationChoice>,
+    start_date: Option<String>,
+    due_date: Option<String>,
+    priority: Option<i64>,
 ) -> Result<Conversion, TaskError> {
-    let draft = ConversionDraft { title, details, destination: destination.unwrap_or_default() };
+    let draft = ConversionDraft {
+        title,
+        details,
+        destination: destination.unwrap_or_default(),
+        start_date,
+        due_date,
+        priority,
+    };
     with_db(&db, |conn| tasks::convert_item_with(conn, &id, expected_updated_at, &draft, now_ms()))
+}
+
+/// Crée une tâche directement, sans capture d'origine (003-B1b).
+#[tauri::command]
+pub async fn create_task(db: State<'_, Database>, fields: TaskFields) -> Result<Task, TaskError> {
+    with_db(&db, |conn| tasks::create_task(conn, &fields, now_ms()))
+}
+
+/// Modifie une tâche active. `expected_updated_at` : la version ouverte (verrou optimiste).
+#[tauri::command]
+pub async fn update_task(
+    db: State<'_, Database>,
+    id: String,
+    expected_updated_at: i64,
+    fields: TaskFields,
+) -> Result<Task, TaskError> {
+    with_db(&db, |conn| tasks::update_task(conn, &id, expected_updated_at, &fields, now_ms()))
 }
 
 /// Annule la conversion : la capture revient dans la boîte, la tâche est conservée.

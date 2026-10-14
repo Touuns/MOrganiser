@@ -373,3 +373,76 @@ Branche `brique-003a-modale-brouillon`. **Aucune migration, aucune table ni colo
 - Coût réel du flou dans WebView2 non mesuré ; comportement à 480 px de haut sur la vraie fenêtre à confirmer.
 - Le brouillon n'est conservé qu'en mémoire (Q6) : un arrêt forcé de Windows le perd.
 - Le formatage `rustfmt` n'est pas appliqué par le dépôt (code existant non conforme) : non lancé en mode écriture.
+
+## 15. Réalisation 003-B1b : migration 0003 et modèle de tâche enrichi (branche `brique-003b1a-preuve-migration`, non intégrée)
+
+**Aucune migration réelle n'a été exécutée** : la migration 0003 n'a été jouée que sur des bases synthétiques de test. Elle s'appliquera automatiquement à une base v2 **au prochain lancement de l'application** (sauvegarde vérifiée préalable, voir fiche 002 §8) : ne pas lancer Dev avant la répétition v2 → v3 sur copie isolée (003-B1c) et l'accord du propriétaire.
+
+### Schéma v3 (`migrations/0003_task_model.sql`)
+
+| Élément | Décision |
+|---|---|
+| `details` | `TEXT NOT NULL DEFAULT ''`, ≤ 10 000 caractères ; **vide accepté** ; anciennes descriptions copiées à l'identique |
+| `responsibility_id`, `section_id` | Deux FK facultatives vers `destinations` ; nature imposée par déclencheurs ; l'ancien `destination_id` est réparti selon `destinations.kind` (aucune tâche non classée n'est rattachée à « Moi ») ; `destination_id` n'existe plus sur `tasks` |
+| `start_date`, `due_date`, `completed_on` | Jours calendaires `AAAA-MM-JJ`, `CHECK (date(x) IS x)` ; `CHECK (start_date <= due_date)` ; `completed_on` préparé, sans comportement avant 003-C |
+| `priority` | `INTEGER` NULL, `CHECK BETWEEN 1 AND 5` ; 1 à 3 acceptés par Rust (basse, normale, haute) ; 4 et 5 réservés |
+| Index et déclencheurs | `tasks_one_active_per_origin`, `tasks_recent`, `tasks_origin_is_immutable` recréés à l'identique ; `tasks_updated_at_must_grow` étendu aux neuf champs métier ; 4 déclencheurs de nature |
+| `inbox_items`, `destinations` | **Inchangés** (la capture garde sa destination unique) |
+
+### Transposition de la preuve 003-B1a
+Le fichier SQL de production reprend les étapes prouvées (garde-fous → liens mis de côté → `tasks_new` → copie et vérification champ par champ → détachement des liens → `DROP` + `RENAME` → objets → restauration des liens → contrôles finaux). Les lignes `-- @stage: nom` sont lues par les tests, qui **exécutent ce fichier réel** et y injectent une panne avant chaque étape. Interdits et vérifiés : renommer l'ancienne table (`tasks_old` réécrit les clés étrangères), désactiver les clés étrangères, `writable_schema`.
+
+### Exécuteur de migrations
+Chaque migration s'exécute en transaction `IMMEDIATE`, relit `user_version` sous le verrou (une migration déjà appliquée par un autre processus n'est pas rejouée), puis contrôle `foreign_key_check` **avant** de valider (violation = annulation complète, erreur `ForeignKeys`). Les règles de sauvegarde automatique sont inchangées.
+
+### Commandes et contrats
+- `convert_inbox_item_to_task(id, expectedUpdatedAt, title?, details?, destination?, startDate?, dueDate?, priority?)` : `keep`/`clear`/`set` de 003-A conservés (`keep` = destination de la capture reprise dans sa dimension ; `set` = placée dans sa dimension) ; nouvelle variante `split { responsibilityId, sectionId }`.
+- `create_task(fields)` : sans capture d'origine ni provenance inventée, au statut « à faire ».
+- `update_task(id, expectedUpdatedAt, fields)` : verrou optimiste dans le `UPDATE`, refus d'une tâche annulée, aucune écriture sans changement réel, `updated_at` strictement croissant ; ne modifie jamais le statut, l'origine ni `completed_on`. Conflit : code `task_version_conflict`.
+- Nouveaux codes : `invalid_date`, `dates_incoherent`, `invalid_priority`, `destination_kind`, `details_too_long`, `unknown_destination`. Le code `empty_details` n'existe plus (description facultative).
+- Permissions : `allow-create-task` et `allow-update-task` ajoutées à la capacité et au test des permissions.
+
+### Interface (compatibilité minimale, aucune refonte)
+Types et wrappers (`Task` enrichi, `createTask`, `updateTask`), faux backend aligné sur Rust, libellé de classement des listes (« Univers · Rubrique »), détail de tâche (Univers, Rubrique). **La modale 003-A est inchangée** : un champ de classement unique, description encore exigée côté interface (limite de 003-A) ; les deux listes, les dates, la priorité, la création directe et l'édition sont l'objet de 003-B2.
+
+### Tests (2026-10-14)
+`cargo test` 211 réussis, 3 ignorés par conception ; `cargo clippy --all-targets` sans avertissement ; `vitest` 278/278 ; `pnpm typecheck` et `pnpm build` propres. Aucune base réelle ouverte ; application non lancée.
+
+### Limites et suite
+- Dispositif de répétition de migration : étendu à v2 → v3 en 003-B1c (voir §16).
+- Corbeille des tâches créées directement : orientation validée, **non implémentée** ; politique des tâches converties : 003-C.
+- La migration 0003 est prouvée sur SQLite 3.53.2 embarquée : toute montée de version de `rusqlite` impose de rejouer les tests de migration.
+
+## 16. Réalisation 003-B1c : répétition de migration v2 → v3 (2026-10-14, branche `brique-003b1a-preuve-migration`, non intégrée)
+
+**Aucune donnée réelle utilisée** : ni base Dev ou Stable, ni WAL/SHM, ni sauvegarde, ni copie de référence personnelle. Tout s'appuie sur des bases fictives créées par les tests ou, pour la procédure PowerShell, sur un dossier d'essais synthétique **supprimé ensuite**.
+
+### Ce que permet le dispositif
+- Répéter, sur une **copie isolée**, une étape **explicite** : v1 → v2, v2 → v3 ou v1 → v3 (versions données par `MORGANISER_REHEARSAL_FROM` et `_TO`, jamais déduites ; toute autre combinaison, version réelle différente ou valeur invalide = échec avant la moindre création).
+- Comparer l'état avant/après **valeur par valeur** : captures, destinations, liens capture ↔ tâche, tâches ; la projection attendue (répartition de l'ancienne destination selon sa nature, colonnes nouvelles vides, « non classée » conservée) est calculée **en Rust, indépendamment du SQL de migration**.
+- Contrôler intégrité, clés étrangères, version, objets de schéma (index, déclencheurs), absence de table temporaire, sauvegarde, aller-retour conversion/annulation sans résidu, restauration.
+- Refuser une **source incohérente** avant toute migration, et signaler toute divergence par `table#identifiant.champ`, **sans texte**.
+- `open_with(path, migrations)` : `open` en est inchangé ; il permet de répéter une étape précise.
+
+### Marqueur
+`REHEARSAL-RESULT status=… from=… to=… integrity=… schema=… projection=… backup=… roundtrip=… restore=… source=…` — `from` et `to` sont les versions **demandées** ; chaque `OK` n'est émis qu'après vérification effective.
+
+### Testé (synthétique)
+v2 → v3 sans WAL, avec WAL/SHM (les transactions n'existent que dans `-wal` ; la copie du seul `.db` est démontrée incohérente), sans capture active ; v1 → v3 ; v1 → v2 (non-régression) ; version ou plan refusé ; source incohérente ; panne en cours de migration ; valeur, classement, lien ou ligne altérés (détectés) ; source modifiée pendant la copie ; absence de texte et de chemin dans les messages. **Procédure PowerShell** (phases A puis B, fiche 002 §13 ; script modifié en B1c : versions `$From`/`$To`, nouveau marqueur, lignes Schéma et Projection ; complété en B1d) exécutée sur une base fictive : v2 → v3 en réussite, et refus de v1 → v2 / v1 → v3 sur une copie v2 et de la combinaison 3 → 2.
+
+### Non vérifié, autorisations distinctes requises
+Aucune migration, copie ni répétition sur la base Dev réelle. À obtenir séparément : (1) phase A sur Dev (application entièrement fermée) ; (2) phase B sur cette copie. La base Dev réelle (v2) reste à migrer à l'ouverture de l'application, après sauvegarde vérifiée : **ne pas lancer Dev avant ces étapes**.
+
+## 17. Réalisation 003-B1d : durcissement après audit indépendant (2026-10-14, non commité)
+
+**Aucune donnée réelle utilisée ; aucune migration réelle.**
+
+### Garde-fou contre la migration automatique (implémenté)
+- `storage::open_guarded(path, permit)` est le seul point d'ouverture de production. Une **base neuve** (fichier absent ou sans aucune table) est créée librement. Une **base existante** de version inférieure à la cible n'est migrée **que si** une autorisation désigne exactement sa version actuelle et la version cible ; sinon `MigrationNotAuthorized`, **avant** tout réglage, sauvegarde ou écriture (sonde en lecture seule).
+- Autorisation : fichier `migration-authorization.txt` dans le dossier de données, trois lignes exactes `channel=dev`, `from=2`, `to=3`. Lue **uniquement pour Dev**, jamais pour Stable. Elle ne vaut que pour cette paire de versions : une fois la base migrée, elle est inopérante. Rien n'est activé par défaut ; l'application ne crée jamais ce fichier.
+- Un fichier sans version mais contenant des tables, ou une version future, restent refusés. Sauvegarde préalable, contrôles d'intégrité et de clés étrangères : inchangés.
+- **Procédure proposée** (à n'utiliser qu'après répétition réussie sur copie et accord du propriétaire) : application fermée, créer le fichier à la main dans le dossier de données Dev, lancer Dev, puis supprimer le fichier.
+- Limite : un build Stable ne migre aucune base existante tant qu'une décision explicite n'étend pas ce mécanisme.
+
+### Répétition
+- `status=OK` exige désormais **toutes** les étapes (test dédié). PowerShell : ligne `Aller-retour conversion/annulation`, mapping des groupes documenté, révision Git (`RÉUSSITE NON TRAÇABLE` si code non commité), contrôle des processus élargi.

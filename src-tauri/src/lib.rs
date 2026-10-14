@@ -42,7 +42,9 @@ pub fn run() {
             )?;
 
             // La base est toujours dans le dossier validé ci-dessus (Dev ou Stable).
-            let conn = storage::open(&data_dir.join(storage::DB_FILE_NAME))?;
+            // Une base existante n'est migrée que sur autorisation explicite (Dev uniquement).
+            let permit = storage::MigrationPermit::load(&data_dir, channel);
+            let conn = storage::open_guarded(&data_dir.join(storage::DB_FILE_NAME), permit)?;
             app.manage(Database(Mutex::new(conn)));
             app.manage(AppEnvironment { channel, data_dir });
 
@@ -71,6 +73,8 @@ pub fn run() {
             commands::list_tasks,
             commands::get_task,
             commands::list_converted_items,
+            commands::create_task,
+            commands::update_task,
         ])
         .build(tauri::generate_context!())
         .expect("erreur au lancement de M'Organiser")

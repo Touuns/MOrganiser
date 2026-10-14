@@ -6,6 +6,7 @@ import type {
   InboxItem,
   InboxPage,
   Task,
+  TaskFields,
   TaskPage,
 } from "../features/inbox/api";
 
@@ -29,6 +30,17 @@ const MAX_TITLE_CHARS = 120;
 const MAX_CONTENT_CHARS = 10_000;
 
 const collapse = (text: string) => text.split(/\s+/).filter(Boolean).join(" ");
+
+/** `AAAA-MM-JJ` strict et jour réel du calendrier (mêmes règles que Rust). */
+export function isValidCalendarDate(value: string): boolean {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return false;
+  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])];
+  if (year === 0 || month < 1 || month > 12 || day < 1) return false;
+  const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+  return day <= days;
+}
 
 /** Titre proposé : première ligne non vide, espaces normalisés, 120 caractères au plus (« … » si coupé). */
 export function suggestTitle(content: string): string {
@@ -135,6 +147,147 @@ export function createFakeBackend() {
     return { items: items.map((t) => ({ ...t })), total: scoped.length, nextCursor };
   }
 
+  const kindOf = (id: string) => DESTINATIONS.find((d) => d.id === id)?.kind;
+
+  /** Dates calendaires valides, début <= échéance, priorité 1 à 3 (mêmes règles que Rust). */
+  function checkSchedule(
+    start: string | null,
+    due: string | null,
+    priority: number | null,
+  ): Promise<never> | null {
+    for (const date of [start, due]) {
+      if (date !== null && !isValidCalendarDate(date)) {
+        return fail("invalid_date", "Une date n'est pas valide : utilisez une vraie date du calendrier.");
+      }
+    }
+    if (start !== null && due !== null && start > due) {
+      return fail("dates_incoherent", "La date de début ne peut pas être postérieure à l'échéance.");
+    }
+    if (priority !== null && ![1, 2, 3].includes(priority)) {
+      return fail("invalid_priority", "Cette priorité n'est pas disponible.");
+    }
+    return null;
+  }
+
+  type Classification =
+    | { responsibilityId: string | null; sectionId: string | null }
+    | { error: Promise<never> };
+
+  /** Une destination pour une dimension : existante, de la bonne nature (les archives ne sont pas simulées). */
+  function checkDimension(id: string, expected: "responsibility" | "section"): Promise<never> | null {
+    const kind = kindOf(id);
+    if (kind === undefined) return fail("unknown_destination", "Cette destination n'est pas disponible.");
+    if (kind !== expected) {
+      return fail("destination_kind", "Cette destination ne peut pas être utilisée à cet endroit.");
+    }
+    return null;
+  }
+
+  function resolveClassification(captureDestination: string | null, choice: DestinationChoice): Classification {
+    const place = (id: string): Classification => {
+      const kind = kindOf(id);
+      if (kind === undefined) {
+        return { error: fail("unknown_destination", "Cette destination n'est pas disponible.") };
+      }
+      return kind === "responsibility"
+        ? { responsibilityId: id, sectionId: null }
+        : { responsibilityId: null, sectionId: id };
+    };
+    switch (choice.type) {
+      case "clear":
+        return { responsibilityId: null, sectionId: null };
+      case "set":
+        return place(choice.id);
+      case "split": {
+        const responsibilityId = choice.responsibilityId || null;
+        const sectionId = choice.sectionId || null;
+        const error =
+          (responsibilityId && checkDimension(responsibilityId, "responsibility")) ||
+          (sectionId && checkDimension(sectionId, "section"));
+        return error ? { error } : { responsibilityId, sectionId };
+      }
+      default:
+        return captureDestination === null
+          ? { responsibilityId: null, sectionId: null }
+          : place(captureDestination);
+    }
+  }
+
+  /** Titre normalisé, description (vide acceptée), calendrier : validation commune des champs. */
+  function validateFields(
+    fields: TaskFields,
+  ): { error: Promise<never> } | { title: string; details: string; fields: TaskFields } {
+    const title = collapse(fields.title ?? "");
+    if (title === "") return { error: fail("empty_title", "Le titre de la tâche est vide.") };
+    if ([...title].length > MAX_TITLE_CHARS) {
+      return { error: fail("title_too_long", `Le titre dépasse ${MAX_TITLE_CHARS} caractères.`) };
+    }
+    const details = String(fields.details ?? "").trim();
+    if ([...details].length > MAX_CONTENT_CHARS) {
+      return { error: fail("details_too_long", `La description dépasse ${MAX_CONTENT_CHARS} caractères.`) };
+    }
+    const schedule = checkSchedule(fields.startDate ?? null, fields.dueDate ?? null, fields.priority ?? null);
+    if (schedule) return { error: schedule };
+    const responsibilityId = fields.responsibilityId || null;
+    const sectionId = fields.sectionId || null;
+    const dimension =
+      (responsibilityId && checkDimension(responsibilityId, "responsibility")) ||
+      (sectionId && checkDimension(sectionId, "section"));
+    if (dimension) return { error: dimension };
+    return { title, details, fields: { ...fields, responsibilityId, sectionId } };
+  }
+
+  function createTaskDirect(args: Record<string, unknown>): Promise<unknown> {
+    const valid = validateFields(args.fields as TaskFields);
+    if ("error" in valid) return valid.error;
+    const now = tick();
+    state.taskSequence += 1;
+    const task: Task = {
+      id: `task-${String(state.taskSequence).padStart(4, "0")}`,
+      title: valid.title,
+      details: valid.details,
+      status: "todo",
+      responsibilityId: valid.fields.responsibilityId,
+      sectionId: valid.fields.sectionId,
+      startDate: valid.fields.startDate ?? null,
+      dueDate: valid.fields.dueDate ?? null,
+      completedOn: null,
+      priority: valid.fields.priority ?? null,
+      originInboxItemId: null, // aucune capture inventée
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+    };
+    state.tasks.push(task);
+    return Promise.resolve({ ...task });
+  }
+
+  function updateTaskFields(args: Record<string, unknown>): Promise<unknown> {
+    const valid = validateFields(args.fields as TaskFields);
+    if ("error" in valid) return valid.error;
+    const task = findTask(args.id as string);
+    if (!task) return fail("task_not_found", "Cette tâche n'existe plus.");
+    if (task.deletedAt !== null) return fail("task_not_active", "Cette tâche est déjà annulée.");
+    if (task.updatedAt !== args.expectedUpdatedAt) {
+      return fail("task_version_conflict", "Cette tâche a été modifiée depuis son ouverture.");
+    }
+    const next = {
+      title: valid.title,
+      details: valid.details,
+      responsibilityId: valid.fields.responsibilityId,
+      sectionId: valid.fields.sectionId,
+      startDate: valid.fields.startDate ?? null,
+      dueDate: valid.fields.dueDate ?? null,
+      priority: valid.fields.priority ?? null,
+    };
+    const changed = (Object.keys(next) as (keyof typeof next)[]).some((key) => task[key] !== next[key]);
+    if (changed) {
+      Object.assign(task, next);
+      task.updatedAt = Math.max(tick(), task.updatedAt + 1); // statut, origine, réalisation : intacts
+    }
+    return Promise.resolve({ ...task });
+  }
+
   function convert(args: Record<string, unknown>): Promise<unknown> {
     const given = args.title as string | null | undefined;
     let title: string | null = null;
@@ -145,15 +298,20 @@ export function createFakeBackend() {
         return fail("title_too_long", `Le titre dépasse ${MAX_TITLE_CHARS} caractères.`);
       }
     }
-    // Description (003-A) : extrémités nettoyées, ni vide ni trop longue (mêmes règles que Rust).
+    // Description : extrémités nettoyées, VIDE ACCEPTÉE (facultative), pas trop longue (comme Rust).
     let details: string | null = null;
     if (args.details !== null && args.details !== undefined) {
       details = String(args.details).trim();
-      if (details === "") return fail("empty_details", "La description de la tâche est vide.");
       if ([...details].length > MAX_CONTENT_CHARS) {
         return fail("details_too_long", `La description dépasse ${MAX_CONTENT_CHARS} caractères.`);
       }
     }
+    const scheduleError = checkSchedule(
+      (args.startDate as string | null | undefined) ?? null,
+      (args.dueDate as string | null | undefined) ?? null,
+      (args.priority as number | null | undefined) ?? null,
+    );
+    if (scheduleError) return scheduleError;
     const item = find(args.id as string);
     if (!item) return fail("not_found", "Cette capture n'existe plus.");
     if (item.deletedAt !== null) {
@@ -169,16 +327,8 @@ export function createFakeBackend() {
     }
     // Classement de la tâche : indépendant de celui de la capture, qui ne change jamais.
     const choice = (args.destination as DestinationChoice | null | undefined) ?? { type: "keep" };
-    let destinationId: string | null;
-    if (choice.type === "set") {
-      const known = DESTINATIONS.some((d) => d.id === choice.id);
-      if (choice.id !== item.destinationId && !known) {
-        return fail("unknown_destination", "Cette destination n'est pas disponible.");
-      }
-      destinationId = choice.id;
-    } else {
-      destinationId = choice.type === "clear" ? null : item.destinationId;
-    }
+    const classification = resolveClassification(item.destinationId, choice);
+    if ("error" in classification) return classification.error;
     const now = tick();
     state.taskSequence += 1;
     const task: Task = {
@@ -186,7 +336,12 @@ export function createFakeBackend() {
       title: title ?? suggestTitle(item.content),
       details: details ?? item.content,
       status: "todo",
-      destinationId,
+      responsibilityId: classification.responsibilityId,
+      sectionId: classification.sectionId,
+      startDate: (args.startDate as string | null | undefined) ?? null,
+      dueDate: (args.dueDate as string | null | undefined) ?? null,
+      completedOn: null,
+      priority: (args.priority as number | null | undefined) ?? null,
       originInboxItemId: item.id,
       createdAt: now,
       updatedAt: now,
@@ -288,6 +443,10 @@ export function createFakeBackend() {
       }
       case "convert_inbox_item_to_task":
         return convert(args);
+      case "create_task":
+        return createTaskDirect(args);
+      case "update_task":
+        return updateTaskFields(args);
       case "cancel_task_conversion":
         return cancel(args);
       case "list_tasks":
