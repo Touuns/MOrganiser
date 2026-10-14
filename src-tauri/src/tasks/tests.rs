@@ -781,3 +781,360 @@ fn conversions_simultanees_de_captures_differentes_reussissent_toutes() {
     assert_eq!(count(&conn, "SELECT count(*) FROM tasks WHERE deleted_at IS NULL"), 6);
     assert_invariants(&conn);
 }
+
+// --- 003-A : brouillon de tâche (titre, description et destination saisis) ---
+
+fn draft(title: Option<&str>, details: Option<&str>, destination: DestinationChoice) -> ConversionDraft {
+    ConversionDraft {
+        title: title.map(str::to_owned),
+        details: details.map(str::to_owned),
+        destination,
+    }
+}
+
+fn convert_draft(
+    conn: &Connection,
+    item: &InboxItem,
+    draft: &ConversionDraft,
+    at: i64,
+) -> Result<Conversion, TaskError> {
+    convert_item_with(conn, &item.id, item.updated_at, draft, T0 + at)
+}
+
+#[test]
+fn la_description_et_la_destination_saisies_sont_enregistrees_et_la_capture_reste_intacte() {
+    let conn = db();
+    let item = capture(&conn, "Texte original\nsur deux lignes", Some("finances"), 1);
+    let d = draft(
+        Some("Mon titre"),
+        Some("Description réécrite\n\nAvec un paragraphe"),
+        DestinationChoice::Set { id: "inventaire".into() },
+    );
+
+    let done = convert_draft(&conn, &item, &d, 10).unwrap();
+
+    assert_eq!(done.task.title, "Mon titre");
+    assert_eq!(done.task.details, "Description réécrite\n\nAvec un paragraphe");
+    assert_eq!(done.task.destination_id.as_deref(), Some("inventaire"));
+    assert_eq!(done.task.status, TaskStatus::Todo);
+    // Capture : texte, destination et dates strictement conservés ; seule la conversion est marquée.
+    assert_eq!(done.item.content, "Texte original\nsur deux lignes");
+    assert_eq!(done.item.destination_id.as_deref(), Some("finances"));
+    assert_eq!((done.item.created_at, done.item.updated_at), (item.created_at, item.updated_at));
+    assert_eq!(done.item.converted_task_id.as_deref(), Some(done.task.id.as_str()));
+    let stored = inbox::get_item(&conn, &item.id).unwrap();
+    assert_eq!(stored.content, item.content);
+    assert_eq!(stored.destination_id, item.destination_id);
+    assert_invariants(&conn);
+}
+
+#[test]
+fn la_description_est_nettoyee_aux_extremites_seulement() {
+    let conn = db();
+    let item = capture(&conn, "Original", None, 1);
+    let d = draft(None, Some("  \n  Ligne un\n\n   ligne   trois  \n "), DestinationChoice::Keep);
+    let done = convert_draft(&conn, &item, &d, 10).unwrap();
+    assert_eq!(done.task.details, "Ligne un\n\n   ligne   trois");
+    assert_eq!(done.task.title, "Original"); // titre suggéré à partir de la CAPTURE
+}
+
+#[test]
+fn sans_description_le_texte_integral_de_la_capture_est_repris() {
+    let conn = db();
+    let item = capture(&conn, "Première ligne\nSuite", Some("moi"), 1);
+    let done = convert_draft(&conn, &item, &ConversionDraft::default(), 10).unwrap();
+    assert_eq!(done.task.details, "Première ligne\nSuite");
+    assert_eq!(done.task.destination_id.as_deref(), Some("moi"));
+}
+
+#[test]
+fn la_destination_peut_etre_retiree_ou_changee_sans_toucher_la_capture() {
+    let conn = db();
+    let cleared = capture(&conn, "Sans classement", Some("moi"), 1);
+    let done = convert_draft(&conn, &cleared, &draft(None, None, DestinationChoice::Clear), 10).unwrap();
+    assert_eq!(done.task.destination_id, None);
+    assert_eq!(done.item.destination_id.as_deref(), Some("moi"));
+
+    let unclassified = capture(&conn, "Capture libre", None, 2);
+    let done = convert_draft(
+        &conn,
+        &unclassified,
+        &draft(None, None, DestinationChoice::Set { id: "externe".into() }),
+        11,
+    )
+    .unwrap();
+    assert_eq!(done.task.destination_id.as_deref(), Some("externe"));
+    assert_eq!(done.item.destination_id, None);
+    assert_invariants(&conn);
+}
+
+#[test]
+fn une_description_vide_ou_blanche_est_refusee_sans_rien_modifier() {
+    let conn = db();
+    let item = capture(&conn, "À ne pas perdre", None, 1);
+    for blank in ["", "   ", "\n\t \n"] {
+        let before = snapshot(&conn);
+        let error = convert_draft(&conn, &item, &draft(None, Some(blank), DestinationChoice::Keep), 10)
+            .unwrap_err();
+        assert_eq!(error.code(), "empty_details");
+        assert_eq!(before, snapshot(&conn), "un refus ne modifie rien");
+    }
+    // Jamais remplacée en silence par le texte de la capture.
+    assert_eq!(count(&conn, "SELECT count(*) FROM tasks"), 0);
+}
+
+#[test]
+fn les_longueurs_sont_validees_cote_rust() {
+    let conn = db();
+    let item = capture(&conn, "Longueurs", None, 1);
+    let too_long = "é".repeat(inbox::MAX_CONTENT_CHARS + 1);
+    let before = snapshot(&conn);
+    assert_eq!(
+        convert_draft(&conn, &item, &draft(None, Some(&too_long), DestinationChoice::Keep), 10)
+            .unwrap_err()
+            .code(),
+        "details_too_long"
+    );
+    assert_eq!(
+        convert_draft(&conn, &item, &draft(Some(&"a".repeat(121)), None, DestinationChoice::Keep), 10)
+            .unwrap_err()
+            .code(),
+        "title_too_long"
+    );
+    assert_eq!(
+        convert_draft(&conn, &item, &draft(Some("  "), None, DestinationChoice::Keep), 10)
+            .unwrap_err()
+            .code(),
+        "empty_title"
+    );
+    assert_eq!(before, snapshot(&conn));
+
+    // Les bornes exactes passent (caractères multi-octets comptés en caractères, pas en octets).
+    let exact = "é".repeat(inbox::MAX_CONTENT_CHARS);
+    let done = convert_draft(
+        &conn,
+        &item,
+        &draft(Some(&"a".repeat(120)), Some(&exact), DestinationChoice::Keep),
+        11,
+    )
+    .unwrap();
+    assert_eq!(done.task.details.chars().count(), inbox::MAX_CONTENT_CHARS);
+    assert_eq!(done.item.content, "Longueurs");
+}
+
+#[test]
+fn une_destination_inconnue_ou_archivee_est_refusee_une_destination_inchangee_reste_acceptee() {
+    let conn = db();
+    let item = capture(&conn, "Classement", Some("inventaire"), 1);
+    let before = snapshot(&conn);
+
+    for id in ["inconnue", "", "'; DROP TABLE tasks; --"] {
+        let error = convert_draft(
+            &conn,
+            &item,
+            &draft(None, None, DestinationChoice::Set { id: id.into() }),
+            10,
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "unknown_destination", "{id:?}");
+        assert!(!error.to_string().contains("DROP"), "le message ne reprend pas la saisie");
+    }
+    assert_eq!(before, snapshot(&conn));
+
+    // Archivée depuis : refusée comme nouveau choix, mais conservée si c'est celle de la capture.
+    conn.execute("UPDATE destinations SET archived_at = 5 WHERE id IN ('finances', 'inventaire')", [])
+        .unwrap();
+    let error = convert_draft(
+        &conn,
+        &item,
+        &draft(None, None, DestinationChoice::Set { id: "finances".into() }),
+        11,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "unknown_destination");
+    let kept = convert_draft(
+        &conn,
+        &item,
+        &draft(None, None, DestinationChoice::Set { id: "inventaire".into() }),
+        12,
+    )
+    .unwrap();
+    assert_eq!(kept.task.destination_id.as_deref(), Some("inventaire"));
+    assert_eq!(count(&conn, "SELECT count(*) FROM tasks"), 1);
+    assert_invariants(&conn);
+}
+
+#[test]
+fn le_brouillon_respecte_les_refus_de_la_brique_002() {
+    let conn = db();
+    let item = capture(&conn, "Version 1", None, 1);
+    let d = draft(Some("Titre"), Some("Description"), DestinationChoice::Keep);
+
+    // Version périmée.
+    let edited = inbox::update_item(&conn, &item.id, "Version 2", None, item.updated_at, T0 + 5).unwrap();
+    let before = snapshot(&conn);
+    assert_eq!(convert_draft(&conn, &item, &d, 10).unwrap_err().code(), "version_conflict");
+    assert_eq!(before, snapshot(&conn));
+
+    // Corbeille.
+    inbox::trash_item(&conn, &item.id, T0 + 6).unwrap();
+    assert_eq!(convert_draft(&conn, &edited, &d, 11).unwrap_err().code(), "trashed");
+    inbox::restore_item(&conn, &item.id).unwrap();
+
+    // Déjà convertie : pas de doublon, la tâche existante est désignée.
+    let first = convert_draft(&conn, &edited, &d, 12).unwrap();
+    match convert_draft(&conn, &edited, &d, 13).unwrap_err() {
+        TaskError::AlreadyConverted { task_id } => assert_eq!(task_id, first.task.id),
+        other => panic!("attendu already_converted, obtenu {other:?}"),
+    }
+    assert_eq!(count(&conn, "SELECT count(*) FROM tasks"), 1);
+    assert_invariants(&conn);
+}
+
+#[test]
+fn echec_au_milieu_d_une_conversion_avec_brouillon_annule_tout() {
+    let conn = db();
+    let item = capture(&conn, "Atomicité du brouillon", Some("moi"), 1);
+    conn.execute_batch(
+        "CREATE TRIGGER test_fail_mark BEFORE UPDATE OF converted_at ON inbox_items
+         BEGIN SELECT RAISE(ABORT, 'panne simulée'); END;",
+    )
+    .unwrap();
+    let before = snapshot(&conn);
+    let d = draft(
+        Some("Titre"),
+        Some("Description saisie"),
+        DestinationChoice::Set { id: "externe".into() },
+    );
+
+    let error = convert_draft(&conn, &item, &d, 10).unwrap_err();
+    assert_eq!(error.code(), "storage");
+    assert_eq!(count(&conn, "SELECT count(*) FROM tasks"), 0, "la tâche insérée a été annulée");
+    assert_eq!(before, snapshot(&conn));
+
+    conn.execute_batch("DROP TRIGGER test_fail_mark").unwrap();
+    assert!(convert_draft(&conn, &item, &d, 11).is_ok());
+    assert_invariants(&conn);
+}
+
+#[test]
+fn annuler_une_conversion_avec_brouillon_remet_la_capture_a_l_identique() {
+    let conn = db();
+    let item = capture(&conn, "Capture d'origine", Some("moi"), 1);
+    let d = draft(
+        Some("Titre perso"),
+        Some("Description très différente"),
+        DestinationChoice::Set { id: "administratif".into() },
+    );
+    let done = convert_draft(&conn, &item, &d, 10).unwrap();
+
+    // La garde de la brique 002 est inchangée : tâche intacte => annulation possible.
+    let cancelled = cancel_conversion(&conn, &done.task.id, T0 + 20).unwrap();
+    assert_eq!(cancelled.item, item);
+    assert_eq!(cancelled.task.deleted_at, Some(T0 + 20));
+    assert_eq!(cancelled.task.details, "Description très différente"); // conservée, annulée
+    assert_eq!(count(&conn, "SELECT count(*) FROM tasks"), 1);
+    assert_invariants(&conn);
+
+    // Et toujours refusée si la tâche a été modifiée ou avancée.
+    let again = convert_draft(&conn, &item, &d, 30).unwrap();
+    conn.execute(
+        "UPDATE tasks SET status = 'in_progress', updated_at = updated_at + 1 WHERE id = ?1",
+        [&again.task.id],
+    )
+    .unwrap();
+    assert_eq!(cancel_conversion(&conn, &again.task.id, T0 + 40).unwrap_err().code(), "task_modified");
+    assert_invariants(&conn);
+}
+
+#[test]
+fn la_provenance_et_le_declencheur_restent_inchanges_apres_un_brouillon() {
+    let conn = db();
+    let item = capture(&conn, "Provenance", None, 1);
+    let d = draft(Some("T"), Some("D"), DestinationChoice::Keep);
+    let done = convert_draft(&conn, &item, &d, 10).unwrap();
+    assert_eq!(done.task.origin_inbox_item_id.as_deref(), Some(item.id.as_str()));
+    assert_eq!((done.task.created_at, done.task.updated_at), (T0 + 10, T0 + 10));
+    // Le déclencheur de la brique 002 s'applique : modifier la description sans faire croître
+    // updated_at est refusé, comme réécrire la provenance.
+    assert!(conn
+        .execute("UPDATE tasks SET details = 'autre' WHERE id = ?1", [&done.task.id])
+        .is_err());
+    assert!(conn
+        .execute("UPDATE tasks SET origin_inbox_item_id = NULL WHERE id = ?1", [&done.task.id])
+        .is_err());
+}
+
+#[test]
+fn conversions_simultanees_avec_brouillons_differents_une_seule_tache() {
+    let (_dir, path) = file_db();
+    let item = {
+        let conn = storage::open(&path).unwrap();
+        capture(&conn, "Course avec brouillons", Some("moi"), 1)
+    };
+    const THREADS: usize = 8;
+    let barrier = Arc::new(Barrier::new(THREADS));
+    let handles: Vec<_> = (0..THREADS)
+        .map(|n| {
+            let (path, id, barrier) = (path.clone(), item.id.clone(), barrier.clone());
+            std::thread::spawn(move || {
+                let conn = storage::open(&path).unwrap();
+                let d = ConversionDraft {
+                    title: Some(format!("Titre {n}")),
+                    details: Some(format!("Description {n}")),
+                    destination: DestinationChoice::Set { id: "externe".into() },
+                };
+                barrier.wait();
+                convert_item_with(&conn, &id, item.updated_at, &d, T0 + 10 + n as i64).map(|c| c.task)
+            })
+        })
+        .collect();
+    let results: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+
+    let winners: Vec<_> = results.iter().filter_map(|r| r.as_ref().ok()).collect();
+    assert_eq!(winners.len(), 1, "exactement une conversion : {results:?}");
+    for result in &results {
+        if let Err(error) = result {
+            assert_eq!(error.code(), "already_converted", "{error:?}");
+        }
+    }
+    let conn = storage::open(&path).unwrap();
+    assert_eq!(count(&conn, "SELECT count(*) FROM tasks"), 1);
+    // La tâche stockée est exactement celle du gagnant, avec SON brouillon complet.
+    let stored = get_task(&conn, &winners[0].id).unwrap();
+    assert_eq!(stored, *winners[0]);
+    assert!(stored.title.starts_with("Titre ") && stored.details.starts_with("Description "));
+    assert_eq!(stored.title.trim_start_matches("Titre "), stored.details.trim_start_matches("Description "));
+    assert_eq!(stored.destination_id.as_deref(), Some("externe"));
+    assert_eq!(inbox::get_item(&conn, &item.id).unwrap().content, "Course avec brouillons");
+    assert_invariants(&conn);
+}
+
+#[test]
+fn le_choix_de_destination_se_lit_au_format_de_l_interface() {
+    let keep: DestinationChoice = serde_json::from_str(r#"{"type":"keep"}"#).unwrap();
+    let clear: DestinationChoice = serde_json::from_str(r#"{"type":"clear"}"#).unwrap();
+    let set: DestinationChoice = serde_json::from_str(r#"{"type":"set","id":"moi"}"#).unwrap();
+    assert_eq!(keep, DestinationChoice::Keep);
+    assert_eq!(clear, DestinationChoice::Clear);
+    assert_eq!(set, DestinationChoice::Set { id: "moi".into() });
+    assert_eq!(DestinationChoice::default(), DestinationChoice::Keep);
+    // Un type inconnu ou un « set » sans identifiant ne devient jamais une destination.
+    assert!(serde_json::from_str::<DestinationChoice>(r#"{"type":"other"}"#).is_err());
+    assert!(serde_json::from_str::<DestinationChoice>(r#"{"type":"set"}"#).is_err());
+}
+
+#[test]
+fn les_nouveaux_messages_d_erreur_ne_reprennent_pas_le_texte_saisi() {
+    let conn = db();
+    let item = capture(&conn, "Secret de la capture", None, 1);
+    let secret = format!("MOT-DE-PASSE-{}", "x".repeat(inbox::MAX_CONTENT_CHARS));
+    let error = convert_draft(&conn, &item, &draft(None, Some(&secret), DestinationChoice::Keep), 10)
+        .unwrap_err();
+    let json = serde_json::to_value(&error).unwrap();
+    assert_eq!(json["code"], "details_too_long");
+    let message = json["message"].as_str().unwrap();
+    assert!(!message.contains("MOT-DE-PASSE") && !message.contains("Secret"));
+    let unknown = serde_json::to_value(TaskError::UnknownDestination).unwrap();
+    assert_eq!(unknown["code"], "unknown_destination");
+}

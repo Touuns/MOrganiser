@@ -1,4 +1,13 @@
-import type { Cursor, Destination, InboxFilter, InboxItem, InboxPage, Task, TaskPage } from "../features/inbox/api";
+import type {
+  Cursor,
+  Destination,
+  DestinationChoice,
+  InboxFilter,
+  InboxItem,
+  InboxPage,
+  Task,
+  TaskPage,
+} from "../features/inbox/api";
 
 /** Erreur telle que Rust la renvoie : `{ code, message }` (+ `taskId` pour `already_converted`). */
 export interface BackendError {
@@ -17,6 +26,7 @@ export const DESTINATIONS: Destination[] = [
 
 const MAX_LIMIT = 200;
 const MAX_TITLE_CHARS = 120;
+const MAX_CONTENT_CHARS = 10_000;
 
 const collapse = (text: string) => text.split(/\s+/).filter(Boolean).join(" ");
 
@@ -135,6 +145,15 @@ export function createFakeBackend() {
         return fail("title_too_long", `Le titre dépasse ${MAX_TITLE_CHARS} caractères.`);
       }
     }
+    // Description (003-A) : extrémités nettoyées, ni vide ni trop longue (mêmes règles que Rust).
+    let details: string | null = null;
+    if (args.details !== null && args.details !== undefined) {
+      details = String(args.details).trim();
+      if (details === "") return fail("empty_details", "La description de la tâche est vide.");
+      if ([...details].length > MAX_CONTENT_CHARS) {
+        return fail("details_too_long", `La description dépasse ${MAX_CONTENT_CHARS} caractères.`);
+      }
+    }
     const item = find(args.id as string);
     if (!item) return fail("not_found", "Cette capture n'existe plus.");
     if (item.deletedAt !== null) {
@@ -148,14 +167,26 @@ export function createFakeBackend() {
     if (item.updatedAt !== args.expectedUpdatedAt) {
       return fail("version_conflict", "Cette capture a été modifiée depuis son ouverture.");
     }
+    // Classement de la tâche : indépendant de celui de la capture, qui ne change jamais.
+    const choice = (args.destination as DestinationChoice | null | undefined) ?? { type: "keep" };
+    let destinationId: string | null;
+    if (choice.type === "set") {
+      const known = DESTINATIONS.some((d) => d.id === choice.id);
+      if (choice.id !== item.destinationId && !known) {
+        return fail("unknown_destination", "Cette destination n'est pas disponible.");
+      }
+      destinationId = choice.id;
+    } else {
+      destinationId = choice.type === "clear" ? null : item.destinationId;
+    }
     const now = tick();
     state.taskSequence += 1;
     const task: Task = {
       id: `task-${String(state.taskSequence).padStart(4, "0")}`,
       title: title ?? suggestTitle(item.content),
-      details: item.content,
+      details: details ?? item.content,
       status: "todo",
-      destinationId: item.destinationId,
+      destinationId,
       originInboxItemId: item.id,
       createdAt: now,
       updatedAt: now,
