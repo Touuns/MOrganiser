@@ -25,7 +25,7 @@ import { FilterSelect, InboxPanel, type Arrival, type InboxPanelHandle } from ".
 import { PAGE_SIZE, PagedCaptureView } from "./PagedCaptureView";
 import { playDeparture, type DepartureHandle } from "./arrivalAnimation";
 import { UndoToast } from "./UndoToast";
-import { TaskCard } from "./TaskCard";
+import { TaskCard, taskClassificationLabel } from "./TaskCard";
 import { TaskDetail } from "./TaskDetail";
 import { InitiationGuide, type BoxState } from "../initiation/InitiationGuide";
 import type { InitiationController } from "../initiation/useInitiation";
@@ -597,11 +597,7 @@ export function InboxHome({ initiation }: { initiation?: InitiationController } 
             renderItem={(task) => (
               <TaskCard
                 task={task}
-                destinationLabel={
-                  task.destinationId
-                    ? (destinations.find((d) => d.id === task.destinationId)?.label ?? task.destinationId)
-                    : null
-                }
+                destinationLabel={taskClassificationLabel(task, destinations)}
                 selected={task.id === selectedTask?.id}
                 onOpen={openTask}
               />

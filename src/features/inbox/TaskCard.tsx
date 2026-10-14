@@ -1,5 +1,5 @@
 import { Badge } from "../../components/Badge";
-import type { Task, TaskStatus } from "./api";
+import type { Destination, Task, TaskStatus } from "./api";
 import { formatShort, isoDate } from "./format";
 import "./CaptureCard.css";
 
@@ -10,6 +10,24 @@ export const STATUS_LABELS: Record<TaskStatus, string> = {
   blocked: "Bloquée",
   done: "Terminée",
 };
+
+/** Libellés d'une destination, ou son identifiant si elle n'est plus listée (archivée). */
+function destinationLabel(destinations: Destination[], id: string | null): string | null {
+  if (id === null) return null;
+  return destinations.find((d) => d.id === id)?.label ?? id;
+}
+
+/**
+ * Classement affiché d'une tâche : « Univers · Rubrique » selon ce qui est renseigné, ou `null`.
+ * Les deux dimensions sont indépendantes et facultatives.
+ */
+export function taskClassificationLabel(task: Task, destinations: Destination[]): string | null {
+  const parts = [
+    destinationLabel(destinations, task.responsibilityId),
+    destinationLabel(destinations, task.sectionId),
+  ].filter((part): part is string => part !== null);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
 
 interface TaskCardProps {
   task: Task;

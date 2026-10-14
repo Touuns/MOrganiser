@@ -18,6 +18,8 @@ const APP_COMMANDS: &[&str] = &[
     "list_tasks",
     "get_task",
     "list_converted_items",
+    "create_task",
+    "update_task",
 ];
 
 fn main() {

@@ -249,6 +249,7 @@ Branche `chore/rehearsal-safety`. Seul le dispositif de test (`storage/rehearsal
 | Garde-fou | Comportement |
 |---|---|
 | Variable `MORGANISER_REHEARSAL_DB` | absente, vide ou composée d'espaces : **échec explicite** (avant : réussite trompeuse) |
+| Variables `MORGANISER_REHEARSAL_FROM` et `_TO` *(003-B1c)* | **obligatoires** et explicites ; seules les combinaisons 1 → 2, 2 → 3 et 1 → 3 sont admises ; la version réelle de la copie doit être exactement `FROM` ; toute autre situation est un échec explicite avant la moindre création |
 | Chemin | absolu, sans `..`, nommé `morganiser.db`, fichier ordinaire non lien |
 | Zones protégées | `%LOCALAPPDATA%`, `%APPDATA%`, dossiers de données Dev et Stable (calculés avec `environment::data_dir`), composant `com.morganiser*` (préfixe tiré de `STABLE_IDENTIFIER`) |
 | Chemin saisi ET canonique | les deux sont contrôlés ; comparaison par composants, insensible à la casse, préfixe `\\?\` retiré |
@@ -258,7 +259,7 @@ Branche `chore/rehearsal-safety`. Seul le dispositif de test (`storage/rehearsal
 | Avant validation | aucun fichier créé, aucune base ouverte (testé) |
 | Source | jamais ouverte par SQLite ; lecture binaire seule (copie et SHA-256) |
 | SHA-256 des fichiers source | présence, taille, date, empreinte de `.db`, `-wal`, `-shm` : avant la copie, après la copie, après l'opération, **même en cas d'erreur** ; la copie temporaire est comparée à la source avant toute ouverture SQLite |
-| Rapport du test | ni texte, ni chemin, ni empreinte ; une **ligne-marqueur à vocabulaire fixe** (`REHEARSAL-RESULT status=… from=… to=… integrity=… backup=… roundtrip=… restore=… source=…`) dont chaque `OK` correspond à une étape réellement vérifiée ; les messages de refus ne contiennent jamais de chemin personnel |
+| Rapport du test | ni texte, ni chemin, ni empreinte ; une **ligne-marqueur à vocabulaire fixe** (`REHEARSAL-RESULT status=… from=… to=… integrity=… schema=… projection=… backup=… roundtrip=… restore=… source=…`, étendue en 003-B1c ; `from` et `to` sont les versions demandées) dont chaque `OK` correspond à une étape réellement vérifiée ; les messages de refus ne contiennent jamais de chemin personnel |
 
 Les empreintes SHA-256 de **fichiers** (contrôle de la source et de la copie) sont distinctes des empreintes **logiques** FNV des lignes SQLite (comparaison avant/après migration), qui ne sont plus affichées.
 
@@ -363,9 +364,13 @@ function Assert-DevSource([string]$Dir) {         # MÉTADONNÉES seulement : au
     }
 }
 function Assert-AppStopped {                      # « Quitter » depuis la zone de notification ; le × ne fait que masquer
-    if (Get-Process -Name 'morganiser-dev' -ErrorAction SilentlyContinue) { Fail 'M''Organiser Dev tourne encore : quittez-le puis relancez.' }
-    $held = @(Get-Process | Where-Object { try { $_.Path -like '*morganiser-dev*' } catch { $false } })
-    if ($held.Count -gt 0) { Fail 'Un processus morganiser-dev subsiste.' }
+    # Aucun nom unique ne suffit : `tauri dev` peut produire `morganiser.exe` ou `morganiser-dev.exe`,
+    # et WebView2 est un processus distinct. On refuse si l'un des indices suivants est présent.
+    if (@(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -like 'morganiser*' }).Count -gt 0) { Fail 'Un processus morganiser* tourne encore : quittez-le puis relancez.' }
+    $held = @(Get-Process | Where-Object { try { $_.Path -like '*morganiser*' -or $_.Path -like '*\src-tauri\target\*' } catch { $false } })
+    if ($held.Count -gt 0) { Fail 'Un processus de M''Organiser (ou de son build) subsiste.' }
+    $web = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*com.morganiser.desktop*' })
+    if ($web.Count -gt 0) { Fail 'Un processus lié aux données M''Organiser (WebView2) subsiste.' }
     if (-not (Test-Path -LiteralPath (Join-Path $AppDataDir 'morganiser.db'))) { Fail 'morganiser.db introuvable dans les données Dev.' }
     foreach ($n in $Names) {
         $p = Join-Path $AppDataDir $n
@@ -453,6 +458,8 @@ Reprend le dossier validé par la phase A, **revérifie ses empreintes** contre 
 ```powershell
 # ===== PHASE B — Répétition de migration sur une copie DÉJÀ validée par la phase A ===
 $DestLeaf = ''          # À RENSEIGNER : nom du dossier validé par la phase A, ex. dev-20261012-101500
+$From     = 2           # À RENSEIGNER : version de la copie (1 ou 2). Jamais déduite.
+$To       = 3           # À RENSEIGNER : version d'arrivée (2 ou 3). Admis : 1>2, 2>3, 1>3.
 $Stamp    = Get-Date -Format 'yyyyMMdd-HHmmss'
 $Log      = Join-Path $Root ("journal-phaseB-$Stamp.log")
 $Report   = [ordered]@{
@@ -460,10 +467,14 @@ $Report   = [ordered]@{
     'Tests réellement exécutés'          = 'inconnu'
     'Répétition'                         = 'ÉCHEC'
     'Version'                            = 'non vérifiée'
-    'Intégrité'                          = 'ÉCHEC'
+    'Intégrité et clés étrangères'       = 'ÉCHEC'
+    'Schéma (objets, version, temporaires)' = 'ÉCHEC'
+    'Projection des données'             = 'ÉCHEC'
     'Sauvegarde et restauration'         = 'ÉCHEC'
+    'Aller-retour conversion/annulation' = 'ÉCHEC'
     'Source Dev inchangée'               = 'ÉCHEC'
     'Copie de référence inchangée'       = 'ÉCHEC'
+    'Révision Git testée'                = 'inconnue'
 }
 $Verdict = 'ÉCHEC'
 $Started = $false
@@ -471,6 +482,7 @@ try {
     # --- Reprise d'une copie validée, empreintes de référence revérifiées ---------
     if (-not $DestLeaf) { Fail 'Renseignez $DestLeaf avec le dossier validé par la phase A.' }
     if ($DestLeaf -notmatch '^dev-\d{8}-\d{6}$') { Fail 'Nom de dossier de copie invalide.' }
+    if (@('1>2', '2>3', '1>3') -notcontains "$From>$To") { Fail 'Combinaison de versions non prise en charge (admises : 1>2, 2>3, 1>3).' }
     $Dest     = Join-Path $Root $DestLeaf
     $Manifest = "$Dest.manifest.json"
     Assert-SafeFolder $Root
@@ -495,8 +507,21 @@ try {
 
     # --- Autorisation explicite, puis UNIQUEMENT le test exact --------------------
     if ((Read-Host 'Tapez EXECUTER pour lancer la répétition sur la COPIE') -ne 'EXECUTER') { Fail 'Phase B annulée : rien n''a été exécuté.' }
+    # Traçabilité : révision exacte du code testé ; « propre » = aucune modification ni fichier non suivi.
+    # `git` écrit des avertissements de fins de ligne sur stderr : avec `Stop` ils seraient fatals.
+    $ErrorActionPreference = 'Continue'
+    $Rev = (& git -C $RepoTauri rev-parse HEAD 2>$null | Select-Object -First 1)
+    & git -C $RepoTauri update-index -q --refresh 2>$null
+    & git -C $RepoTauri diff --quiet HEAD -- 2>$null   # `diff` (et non `diff-index`) : compare le CONTENU, ignore l'artefact de fins de ligne
+    $tracked = ($LASTEXITCODE -eq 0)
+    $untracked = @(& git -C $RepoTauri ls-files --others --exclude-standard 2>$null).Count
+    $ErrorActionPreference = 'Stop'
+    $Clean = $Rev -and $tracked -and ($untracked -eq 0)
+    $Report['Révision Git testée'] = if (-not $Rev) { 'inconnue' } elseif ($Clean) { $Rev.Substring(0,12) + ' (code commité)' } else { $Rev.Substring(0,12) + ' + modifications NON commitées : révision non validée' }
     $Started = $true
-    $env:MORGANISER_REHEARSAL_DB = Join-Path $Dest 'morganiser.db'
+    $env:MORGANISER_REHEARSAL_DB   = Join-Path $Dest 'morganiser.db'
+    $env:MORGANISER_REHEARSAL_FROM = "$From"
+    $env:MORGANISER_REHEARSAL_TO   = "$To"
     $ErrorActionPreference = 'Continue'                  # stderr de cargo ne doit pas lever d'exception
     Push-Location $RepoTauri
     try {
@@ -505,6 +530,8 @@ try {
     } finally {
         Pop-Location
         Remove-Item Env:MORGANISER_REHEARSAL_DB -ErrorAction SilentlyContinue
+        Remove-Item Env:MORGANISER_REHEARSAL_FROM -ErrorAction SilentlyContinue
+        Remove-Item Env:MORGANISER_REHEARSAL_TO -ErrorAction SilentlyContinue
         $ErrorActionPreference = 'Stop'
     }
     $lines | Set-Content -LiteralPath $Log -Encoding UTF8   # sortie brute : journal LOCAL, jamais affiché ni republié
@@ -518,26 +545,33 @@ try {
     $markers = @($lines | Where-Object { $_ -match '^REHEARSAL-RESULT ' })
     $m = $null
     if ($markers.Count -eq 1) {
-        $match = [regex]::Match($markers[0], '^REHEARSAL-RESULT status=(OK|FAIL) from=(\d|\?) to=(\d|\?) integrity=(OK|FAIL) backup=(OK|FAIL) roundtrip=(OK|FAIL) restore=(OK|FAIL) source=(OK|DIFFERENT|UNVERIFIABLE|NOTCHECKED)$')
+        $match = [regex]::Match($markers[0], '^REHEARSAL-RESULT status=(OK|FAIL) from=(\d|\?) to=(\d|\?) integrity=(OK|FAIL) schema=(OK|FAIL) projection=(OK|FAIL) backup=(OK|FAIL) roundtrip=(OK|FAIL) restore=(OK|FAIL) source=(OK|DIFFERENT|UNVERIFIABLE|NOTCHECKED)$')
         if ($match.Success) { $m = $match.Groups }
     }
     # Réussite = code 0 ET exactement un test ET « 1 passed » ET marqueur valide status=OK.
     $testOk = ($exit -eq 0) -and ($ran -eq 1) -and $passed -and ($null -ne $m) -and ($m[1].Value -eq 'OK')
     if ($testOk) {
         $Report['Répétition'] = 'OK'
-        if ($m[2].Value -eq '1' -and $m[3].Value -eq '2') { $Report['Version'] = 'v1 -> v2 (vérifiée)' }
-        $Report['Intégrité'] = if ($m[4].Value -eq 'OK') { 'OK' } else { 'ÉCHEC' }
-        $Report['Sauvegarde et restauration'] = if ($m[5].Value -eq 'OK' -and $m[7].Value -eq 'OK') { 'OK' } else { 'ÉCHEC' }
+        # Les versions DEMANDÉES doivent revenir à l'identique dans le marqueur (jamais déduites).
+        if ($m[2].Value -eq "$From" -and $m[3].Value -eq "$To") { $Report['Version'] = "v$From -> v$To (vérifiée)" }
+        $Report['Intégrité et clés étrangères'] = if ($m[4].Value -eq 'OK') { 'OK' } else { 'ÉCHEC' }
+        $Report['Schéma (objets, version, temporaires)'] = if ($m[5].Value -eq 'OK') { 'OK' } else { 'ÉCHEC' }
+        $Report['Projection des données'] = if ($m[6].Value -eq 'OK') { 'OK' } else { 'ÉCHEC' }
+        $Report['Sauvegarde et restauration'] = if ($m[7].Value -eq 'OK' -and $m[9].Value -eq 'OK') { 'OK' } else { 'ÉCHEC' }
+        # Groupes : 1 status, 2 from, 3 to, 4 integrity, 5 schema, 6 projection, 7 backup, 8 roundtrip, 9 restore, 10 source.
+        $Report['Aller-retour conversion/annulation'] = if ($m[8].Value -eq 'OK') { 'OK' } else { 'ÉCHEC' }
     }
 
     # --- La source Dev et la copie de référence n'ont pas bougé --------------------
     $B1 = Get-Snapshot $AppDataDir
     $C1 = Get-Snapshot $Dest
     $Report['Source Dev inchangée']     = if (Test-SameSnapshot $B0 $B1) { 'OK' } else { 'DIFFÉRENT' }
-    $copyOk = (Test-SameSnapshot $C0 $C1) -and (Test-SameSnapshot $Expected $C1) -and (($null -eq $m) -or ($m[8].Value -eq 'OK'))
+    $copyOk = (Test-SameSnapshot $C0 $C1) -and (Test-SameSnapshot $Expected $C1) -and (($null -eq $m) -or ($m[10].Value -eq 'OK'))
     $Report['Copie de référence inchangée'] = if ($copyOk) { 'OK' } else { 'DIFFÉRENT' }
 
-    if ($testOk -and -not ($Report.Values -contains 'ÉCHEC') -and -not ($Report.Values -contains 'DIFFÉRENT') -and $Report['Version'] -like 'v1*') { $Verdict = 'RÉUSSITE' }
+    if ($testOk -and -not ($Report.Values -contains 'ÉCHEC') -and -not ($Report.Values -contains 'DIFFÉRENT') -and $Report['Version'] -like "v$From*") {
+        $Verdict = if ($Clean) { 'RÉUSSITE' } else { 'RÉUSSITE NON TRAÇABLE (code non commité : ne valide aucune révision)' }
+    }
     elseif ($null -eq $m) { Write-Host 'Résultat inconnu : vérification manuelle des journaux locaux nécessaire.' }
 }
 catch { Write-Failure $_ $Log }
@@ -559,7 +593,7 @@ foreach ($d in $left) {
 }
 ```
 
-Rapport attendu en cas de réussite : `Source Dev identique à la phase A : OK`, `Tests réellement exécutés : 1`, `Répétition : OK`, `Version : v1 -> v2 (vérifiée)`, `Intégrité : OK`, `Sauvegarde et restauration : OK`, `Source Dev inchangée : OK`, `Copie de référence inchangée : OK`, `Verdict : RÉUSSITE`.
+Rapport attendu en cas de réussite (copie v2, `$From = 2`, `$To = 3`) : `Source Dev identique à la phase A : OK`, `Tests réellement exécutés : 1`, `Répétition : OK`, `Version : v2 -> v3 (vérifiée)`, `Intégrité et clés étrangères : OK`, `Schéma (objets, version, temporaires) : OK`, `Projection des données : OK`, `Sauvegarde et restauration : OK`, `Aller-retour conversion/annulation : OK`, `Source Dev inchangée : OK`, `Copie de référence inchangée : OK`, `Révision Git testée : <12 caractères> (code commité)`, `Verdict : RÉUSSITE`. Un code non commité donne `RÉUSSITE NON TRAÇABLE` : à ne pas présenter comme validation d'une révision.
 
 #### Vérification de la procédure elle-même
 Les deux phases ont été exécutées sur un **faux dossier de données** (base v1 fictive avec `-wal` et `-shm`, générée à partir de la vraie migration 0001, hors `%LOCALAPPDATA%`), jamais sur la base Dev :
@@ -580,5 +614,23 @@ Les deux phases ont été exécutées sur un **faux dossier de données** (base 
 - La procédure PowerShell a été exécutée **uniquement sur des données fictives** ; jamais sur la base Dev réelle.
 - Les liens symboliques de **fichiers** n'ont pas pu être créés sur ce poste (privilège absent) : leur refus par `Assert-DevSource` repose sur le code ; jonctions de dossiers et dossiers à la place d'un fichier sont exercés.
 - Les liens physiques (« hard links ») ne sont pas détectés ; ils ne pourraient mener qu'à une lecture seule, car la source n'est jamais ouverte en écriture ni par SQLite.
-- Le test refuse une base qui n'est pas en v1 : si l'application a déjà migré Dev, il n'y a rien à répéter.
+- Le test refuse toute base dont la version réelle n'est pas EXACTEMENT `FROM` : si l'application a déjà migré Dev, il n'y a rien à répéter.
+- (003-B1d) `Assert-AppStopped` ne repose plus sur un seul nom de processus : noms `morganiser*`, chemins d'exécutable (dont `src-tauri\target`), ligne de commande WebView2 `com.morganiser.desktop*` ; l'accès exclusif aux fichiers reste le dernier filet.
 - `Test-FileFree` ouvre les fichiers en lecture exclusive ; il détecte un processus qui les tient, pas un processus qui les ouvrirait plus tard.
+
+### Mise à jour 003-B1c : répétition v2 → v3 (2026-10-14, données synthétiques uniquement)
+
+Le dispositif décrit ci-dessus répète désormais **une étape explicite** (v1 → v2, v2 → v3, ou chaînée v1 → v3). Ce qui a changé, sans retirer aucun garde-fou :
+
+| Point | Avant | Maintenant |
+|---|---|---|
+| Versions | v1 attendue, v2 implicite | `FROM` et `TO` **explicites**, combinaisons admises listées, version réelle de la copie vérifiée |
+| Comparaison | Empreintes FNV (nombre + hachage) de deux tables | Instantané **structurel** (captures, destinations, liens capture ↔ tâche, tâches) et **projection attendue calculée en Rust**, indépendamment du SQL de migration |
+| Divergence | « les captures ont changé » | `table#identifiant.champ`, **jamais de texte** |
+| Étapes du marqueur | intégrité, sauvegarde, aller-retour, restauration | + **schéma** (objets, version, aucune table temporaire) et **projection** ; `OK` seulement si vérifié |
+| Source incohérente | non contrôlée | refusée **avant** toute migration (`integrity_check`, clés étrangères) |
+| Aller-retour | code de production | code de production en v3, SQL v2 équivalent en v2 ; aucune tâche ni capture d'essai résiduelle (état comparé ensuite) |
+
+**Ce qui est testé (synthétique) :** v2 → v3 sans `-wal`, avec `-wal`/`-shm`, sans capture active ; chaînage v1 → v3 ; non-régression v1 → v2 ; refus d'une version de source ou d'un plan non admis ; source incohérente ; panne en cours de migration ; valeur, classement, lien ou ligne altérés après migration (détectés) ; source modifiée pendant la copie ; absence de texte et de chemin dans les messages.
+
+**Ce qui n'est PAS vérifié :** aucune copie d'une base réelle, aucune sauvegarde réelle, aucune migration de la base Dev. **Autorisations distinctes à obtenir** avant : (1) la phase A sur Dev réel (application Dev entièrement fermée, copie `.db` + `-wal` + `-shm` ensemble) ; (2) la phase B sur cette copie.

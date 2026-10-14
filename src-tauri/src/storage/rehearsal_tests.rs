@@ -1,4 +1,9 @@
-//! Répétition de la migration v1 → v2 sur une COPIE ISOLÉE d'une base.
+//! Répétition d'une migration (v1 → v2, v2 → v3, ou chaînée v1 → v3) sur une COPIE ISOLÉE d'une base.
+//!
+//! Les versions de départ et d'arrivée sont **explicites** (`MORGANISER_REHEARSAL_FROM` et
+//! `MORGANISER_REHEARSAL_TO`) : seules les combinaisons de [`SUPPORTED_PLANS`] sont admises, la
+//! version réelle de la copie doit être EXACTEMENT celle demandée, et toute autre situation est un
+//! échec explicite (jamais une réussite silencieuse).
 //!
 //! Deux usages :
 //! - tests ordinaires : le dispositif et ses garde-fous sont vérifiés sur des bases **fictives**
@@ -7,7 +12,9 @@
 //!   copie qu'il a faite lui-même (application fermée, `.db` + `-wal` + `-shm` ensemble) :
 //!
 //!   ```text
-//!   $env:MORGANISER_REHEARSAL_DB = "C:\MOrganiserEssais\dev-AAAA-MM-JJ\morganiser.db"
+//!   $env:MORGANISER_REHEARSAL_DB   = "C:\MOrganiserEssais\dev-AAAA-MM-JJ\morganiser.db"
+//!   $env:MORGANISER_REHEARSAL_FROM = "2"
+//!   $env:MORGANISER_REHEARSAL_TO   = "3"
 //!   cargo test --lib repetition_sur_copie_isolee -- --ignored --nocapture
 //!   ```
 //!
@@ -52,6 +59,7 @@
 //! Nettoyage ciblé recommandé : lister puis supprimer uniquement `morganiser-rehearsal-*`
 //! (voir la procédure PowerShell de la fiche 002), jamais le contenu de `%TEMP%` en bloc.
 
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::fs;
 use std::io;
@@ -67,18 +75,15 @@ use crate::environment::{data_dir, Channel, DEV_IDENTIFIER, STABLE_IDENTIFIER};
 use crate::{inbox, tasks};
 
 const ENV_VAR: &str = "MORGANISER_REHEARSAL_DB";
+/// Version de départ attendue de la copie (explicite, sans déduction).
+const ENV_FROM: &str = "MORGANISER_REHEARSAL_FROM";
+/// Version d'arrivée de la répétition (explicite, sans déduction).
+const ENV_TO: &str = "MORGANISER_REHEARSAL_TO";
 /// Préfixe du dossier de travail : permet un nettoyage ciblé.
 const WORK_PREFIX: &str = "morganiser-rehearsal-";
 /// Fichiers qui forment ensemble la base (`""` = `morganiser.db`).
 const SUFFIXES: [&str; 3] = ["", "-wal", "-shm"];
 
-const V1_TABLES: [(&str, &str); 2] = [
-    ("destinations", "SELECT id, label, kind, position, archived_at FROM destinations ORDER BY id"),
-    (
-        "inbox_items",
-        "SELECT id, content, destination_id, created_at, updated_at, deleted_at FROM inbox_items ORDER BY id",
-    ),
-];
 
 // ---------------------------------------------------------------------------------------------
 // Protection des chemins
@@ -372,41 +377,366 @@ impl SourceCheck {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Empreintes logiques des lignes SQLite (comparaison avant/après migration)
+// Plans pris en charge : versions de départ et d'arrivée EXPLICITES
 // ---------------------------------------------------------------------------------------------
 
-/// Empreinte FNV-1a de lignes (valeurs typées) : sert à comparer deux états logiques ; elle n'est
-/// ni affichée ni conservée.
-fn fingerprint(conn: &Connection, sql: &str) -> (usize, u64) {
-    let mut stmt = conn.prepare(sql).unwrap();
-    let columns = stmt.column_count();
-    let rows = stmt
-        .query_map([], |row| (0..columns).map(|i| row.get::<_, Value>(i)).collect::<Result<Vec<_>, _>>())
-        .unwrap();
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    let mut count = 0;
-    for row in rows {
-        for byte in format!("{:?}", row.unwrap()).bytes() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+/// Étape de migration répétée. Les versions ne sont jamais déduites : elles sont fournies par
+/// l'appelant (variables d'environnement pour l'usage réel) et validées contre cette liste.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Plan {
+    from: u32,
+    to: u32,
+}
+
+const PLAN_V1_V2: Plan = Plan { from: 1, to: 2 };
+const PLAN_V2_V3: Plan = Plan { from: 2, to: 3 };
+const PLAN_V1_V3: Plan = Plan { from: 1, to: 3 };
+/// Seules combinaisons répétables : toute autre est refusée avant la moindre création de fichier.
+const SUPPORTED_PLANS: [Plan; 3] = [PLAN_V1_V2, PLAN_V2_V3, PLAN_V1_V3];
+
+impl Plan {
+    fn new(from: u32, to: u32) -> Result<Plan, String> {
+        let plan = Plan { from, to };
+        if SUPPORTED_PLANS.contains(&plan) {
+            Ok(plan)
+        } else {
+            Err(format!(
+                "combinaison de versions non prise en charge : v{from} -> v{to} (admises : v1 -> v2, v2 -> v3, v1 -> v3)"
+            ))
         }
-        count += 1;
     }
-    (count, hash)
+
+    /// Lit une version dans une variable d'environnement : absente, vide ou non numérique = refus.
+    fn read_version(name: &str, raw: Option<OsString>) -> Result<u32, String> {
+        let raw = raw.ok_or_else(|| format!("{name} absente : indiquez explicitement la version (1, 2 ou 3)"))?;
+        let text = raw.to_string_lossy();
+        text.trim()
+            .parse::<u32>()
+            .map_err(|_| format!("{name} doit être un numéro de version (1, 2 ou 3)"))
+    }
+
+    fn from_values(from: Option<OsString>, to: Option<OsString>) -> Result<Plan, String> {
+        Plan::new(Plan::read_version(ENV_FROM, from)?, Plan::read_version(ENV_TO, to)?)
+    }
+
+    /// Migrations appliquées par ce plan (jusqu'à la version d'arrivée incluse).
+    fn migrations(self) -> &'static [&'static str] {
+        &MIGRATIONS[..self.to as usize]
+    }
 }
 
-fn v1_fingerprints(conn: &Connection) -> Vec<(&'static str, usize, u64)> {
-    V1_TABLES
+// ---------------------------------------------------------------------------------------------
+// Instantané structurel et projection attendue (indépendante du SQL de migration)
+// ---------------------------------------------------------------------------------------------
+
+type Row = Vec<Value>;
+
+const DESTINATION_COLUMNS: &[&str] = &["id", "label", "kind", "position", "archived_at"];
+const CAPTURE_COLUMNS: &[&str] =
+    &["id", "content", "destination_id", "created_at", "updated_at", "deleted_at"];
+const LINK_COLUMNS: &[&str] = &["id", "converted_at", "converted_task_id"];
+const TASK_COLUMNS_V2: &[&str] = &[
+    "id",
+    "title",
+    "details",
+    "status",
+    "destination_id",
+    "origin_inbox_item_id",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+];
+const TASK_COLUMNS_V3: &[&str] = &[
+    "id",
+    "title",
+    "details",
+    "status",
+    "responsibility_id",
+    "section_id",
+    "start_date",
+    "due_date",
+    "completed_on",
+    "priority",
+    "origin_inbox_item_id",
+    "created_at",
+    "updated_at",
+    "deleted_at",
+];
+
+/// État logique d'une base à une version donnée : valeurs réelles (jamais un résumé), conservées
+/// en mémoire seulement. Rien n'est affiché : les rapports ne citent que `table#id.champ`.
+#[derive(Debug, Clone, PartialEq)]
+struct Snapshot {
+    version: u32,
+    destinations: Vec<Row>,
+    captures: Vec<Row>,
+    /// Liens capture → tâche (v2 et au-delà) : `id`, `converted_at`, `converted_task_id`.
+    links: Vec<Row>,
+    tasks: Vec<Row>,
+}
+
+fn rows(conn: &Connection, sql: &str) -> Result<Vec<Row>, String> {
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
+    let columns = stmt.column_count();
+    let mapped = stmt
+        .query_map([], |row| (0..columns).map(|i| row.get::<_, Value>(i)).collect::<Result<Row, _>>())
+        .map_err(|e| e.to_string())?;
+    mapped.collect::<Result<_, _>>().map_err(|e| e.to_string())
+}
+
+fn read_snapshot(conn: &Connection, version: u32) -> Result<Snapshot, String> {
+    let destinations = rows(
+        conn,
+        "SELECT id, label, kind, position, archived_at FROM destinations ORDER BY id",
+    )?;
+    let captures = rows(
+        conn,
+        "SELECT id, content, destination_id, created_at, updated_at, deleted_at
+         FROM inbox_items ORDER BY id",
+    )?;
+    let links = if version >= 2 {
+        rows(conn, "SELECT id, converted_at, converted_task_id FROM inbox_items ORDER BY id")?
+    } else {
+        Vec::new()
+    };
+    let tasks = match version {
+        1 => Vec::new(),
+        2 => rows(
+            conn,
+            "SELECT id, title, details, status, destination_id, origin_inbox_item_id,
+                    created_at, updated_at, deleted_at FROM tasks ORDER BY id",
+        )?,
+        _ => rows(
+            conn,
+            "SELECT id, title, details, status, responsibility_id, section_id, start_date, due_date,
+                    completed_on, priority, origin_inbox_item_id, created_at, updated_at, deleted_at
+             FROM tasks ORDER BY id",
+        )?,
+    };
+    Ok(Snapshot { version, destinations, captures, links, tasks })
+}
+
+/// Projection d'une tâche v2 vers la v3 : l'ancienne destination est répartie selon sa NATURE ;
+/// les colonnes nouvelles sont vides. Écrite ICI, sans réutiliser le SQL de la migration.
+fn project_task(old: &Row, kinds: &HashMap<String, String>) -> Result<Row, String> {
+    let (responsibility, section) = match &old[4] {
+        Value::Null => (Value::Null, Value::Null),
+        Value::Text(id) => match kinds.get(id).map(String::as_str) {
+            Some("responsibility") => (old[4].clone(), Value::Null),
+            Some("section") => (Value::Null, old[4].clone()),
+            _ => return Err("une tâche référence une destination inconnue ou de nature inattendue".into()),
+        },
+        _ => return Err("destination de tâche de type inattendu".into()),
+    };
+    Ok(vec![
+        old[0].clone(),
+        old[1].clone(),
+        old[2].clone(),
+        old[3].clone(),
+        responsibility,
+        section,
+        Value::Null, // start_date
+        Value::Null, // due_date
+        Value::Null, // completed_on
+        Value::Null, // priority
+        old[5].clone(),
+        old[6].clone(),
+        old[7].clone(),
+        old[8].clone(),
+    ])
+}
+
+/// État attendu à la version `to` à partir de l'état de départ : calculé indépendamment du SQL.
+fn expected_after(before: &Snapshot, to: u32) -> Result<Snapshot, String> {
+    let kinds: HashMap<String, String> = before
+        .destinations
         .iter()
-        .map(|(name, sql)| {
-            let (count, hash) = fingerprint(conn, sql);
-            (*name, count, hash)
+        .filter_map(|row| match (&row[0], &row[2]) {
+            (Value::Text(id), Value::Text(kind)) => Some((id.clone(), kind.clone())),
+            _ => None,
         })
-        .collect()
+        .collect();
+    // Les liens existent à partir de la v2 : une capture v1 migrée n'est liée à aucune tâche.
+    let links = if to < 2 {
+        Vec::new()
+    } else if before.version >= 2 {
+        before.links.clone()
+    } else {
+        before.captures.iter().map(|c| vec![c[0].clone(), Value::Null, Value::Null]).collect()
+    };
+    let tasks = match (before.version, to) {
+        (1, _) => Vec::new(),
+        (2, 2) => before.tasks.clone(),
+        (2, 3) => before.tasks.iter().map(|t| project_task(t, &kinds)).collect::<Result<_, _>>()?,
+        (from, to) => return Err(format!("projection non prise en charge : v{from} -> v{to}")),
+    };
+    Ok(Snapshot {
+        version: to,
+        destinations: before.destinations.clone(),
+        captures: before.captures.clone(),
+        links,
+        tasks,
+    })
 }
 
-fn single(conn: &Connection, sql: &str) -> String {
-    conn.query_row(sql, [], |row| row.get::<_, String>(0)).unwrap()
+/// Une différence, décrite SANS contenu : table, identifiant technique, nom du champ.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Divergence {
+    table: &'static str,
+    id: String,
+    field: String,
+}
+
+fn row_id(row: &Row) -> String {
+    match &row[0] {
+        Value::Text(id) => id.clone(),
+        other => format!("{other:?}"),
+    }
+}
+
+fn diff_table(
+    table: &'static str,
+    columns: &[&str],
+    expected: &[Row],
+    actual: &[Row],
+    out: &mut Vec<Divergence>,
+) {
+    let by_id = |rows: &[Row]| -> BTreeMap<String, Row> {
+        rows.iter().map(|r| (row_id(r), r.clone())).collect()
+    };
+    let (expected, actual) = (by_id(expected), by_id(actual));
+    for (id, want) in &expected {
+        match actual.get(id) {
+            None => out.push(Divergence { table, id: id.clone(), field: "ligne absente".into() }),
+            Some(got) if got.len() != want.len() => {
+                out.push(Divergence { table, id: id.clone(), field: "structure".into() })
+            }
+            Some(got) => {
+                for (index, (a, b)) in want.iter().zip(got).enumerate() {
+                    if a != b {
+                        let field = columns.get(index).copied().unwrap_or("?");
+                        out.push(Divergence { table, id: id.clone(), field: field.into() });
+                    }
+                }
+            }
+        }
+    }
+    for id in actual.keys().filter(|id| !expected.contains_key(*id)) {
+        out.push(Divergence { table, id: id.clone(), field: "ligne inattendue".into() });
+    }
+}
+
+/// Compare deux états : liste vide = identiques. Aucune valeur n'est copiée dans le résultat.
+fn compare(expected: &Snapshot, actual: &Snapshot) -> Vec<Divergence> {
+    let mut out = Vec::new();
+    if expected.version != actual.version {
+        out.push(Divergence { table: "schema", id: "-".into(), field: "version".into() });
+    }
+    diff_table("destinations", DESTINATION_COLUMNS, &expected.destinations, &actual.destinations, &mut out);
+    diff_table("inbox_items", CAPTURE_COLUMNS, &expected.captures, &actual.captures, &mut out);
+    diff_table("inbox_items.liens", LINK_COLUMNS, &expected.links, &actual.links, &mut out);
+    let task_columns = if expected.version >= 3 { TASK_COLUMNS_V3 } else { TASK_COLUMNS_V2 };
+    diff_table("tasks", task_columns, &expected.tasks, &actual.tasks, &mut out);
+    out
+}
+
+/// Message d'échec : nombre et premières divergences (`table#id.champ`), jamais de contenu.
+fn describe(divergences: &[Divergence]) -> String {
+    let shown: Vec<String> = divergences
+        .iter()
+        .take(5)
+        .map(|d| format!("{}#{}.{}", d.table, d.id, d.field))
+        .collect();
+    format!("{} divergence(s) : {}", divergences.len(), shown.join(", "))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Contrôles d'intégrité et de schéma
+// ---------------------------------------------------------------------------------------------
+
+/// `integrity_check` = ok et aucune violation de clé étrangère.
+fn check_integrity(conn: &Connection) -> Result<(), String> {
+    let integrity: String =
+        conn.query_row("PRAGMA integrity_check", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+    if integrity != "ok" {
+        return Err("integrity_check en échec".into());
+    }
+    let broken: i64 = conn
+        .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    if broken != 0 {
+        return Err(format!("{broken} violation(s) de clés étrangères"));
+    }
+    Ok(())
+}
+
+/// Objets que le schéma de la version `version` doit contenir.
+fn expected_objects(version: u32) -> Vec<&'static str> {
+    let mut names = vec!["destinations", "inbox_items", "inbox_items_recent", "inbox_items_destination"];
+    if version >= 2 {
+        names.extend([
+            "tasks",
+            "tasks_one_active_per_origin",
+            "tasks_recent",
+            "tasks_updated_at_must_grow",
+            "tasks_origin_is_immutable",
+            "inbox_items_converted_task",
+            "inbox_items_converted",
+        ]);
+    }
+    if version >= 3 {
+        names.extend([
+            "tasks_responsibility_kind_insert",
+            "tasks_responsibility_kind_update",
+            "tasks_section_kind_insert",
+            "tasks_section_kind_update",
+        ]);
+    }
+    names
+}
+
+/// Version, objets attendus présents, forme de `tasks`, aucune table temporaire résiduelle.
+fn check_schema(conn: &Connection, version: u32) -> Result<(), String> {
+    let current: u32 = conn
+        .pragma_query_value(None, "user_version", |row| row.get(0))
+        .map_err(|e| e.to_string())?;
+    if current != version {
+        return Err(format!("version de schéma v{current} au lieu de v{version}"));
+    }
+    let present: Vec<String> = conn
+        .prepare("SELECT name FROM sqlite_master")
+        .and_then(|mut s| s.query_map([], |r| r.get(0))?.collect())
+        .map_err(|e| e.to_string())?;
+    for name in expected_objects(version) {
+        if !present.iter().any(|p| p == name) {
+            return Err(format!("objet de schéma manquant : {name}"));
+        }
+    }
+    if version >= 3 {
+        let has_old_column: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('tasks') WHERE name = 'destination_id'",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if has_old_column != 0 {
+            return Err("l'ancienne colonne destination_id subsiste sur tasks".into());
+        }
+        let leftover: i64 = conn
+            .query_row("SELECT count(*) FROM sqlite_master WHERE name = 'tasks_new'", [], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        if leftover != 0 {
+            return Err("la table de travail tasks_new subsiste".into());
+        }
+    }
+    let temp: i64 = conn
+        .query_row("SELECT count(*) FROM sqlite_temp_master", [], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    if temp != 0 {
+        return Err("objet temporaire résiduel".into());
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -415,7 +745,7 @@ fn single(conn: &Connection, sql: &str) -> String {
 
 /// L'aller-retour conversion/annulation n'est JAMAIS déclaré sans avoir eu lieu : sur une capture
 /// existante de la copie, ou, si elle n'en contient aucune, sur une capture FICTIVE créée puis
-/// supprimée dans la copie temporaire (le contenu de référence est comparé ensuite).
+/// supprimée dans la copie temporaire (l'état attendu est comparé ensuite).
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 enum RoundTrip {
     ExistingCapture,
@@ -424,9 +754,11 @@ enum RoundTrip {
 
 #[derive(Debug)]
 struct Report {
+    plan: Plan,
     version_before: u32,
     version_after: u32,
-    tables: Vec<(&'static str, usize, u64)>,
+    /// `(table, nombre de lignes)` de l'état de départ.
+    tables: Vec<(&'static str, usize)>,
     live_captures: usize,
     /// Sur quelle capture l'aller-retour a réellement eu lieu.
     round_trip: RoundTrip,
@@ -439,19 +771,50 @@ struct Report {
 #[derive(Debug, Default, Clone, Copy)]
 struct Stages {
     integrity: bool,
+    schema: bool,
+    projection: bool,
     backup: bool,
     round_trip: bool,
     restore: bool,
 }
 
+impl Stages {
+    fn all(self) -> bool {
+        self.integrity && self.schema && self.projection && self.backup && self.round_trip && self.restore
+    }
+}
+
 #[derive(Debug)]
 struct Outcome {
+    plan: Plan,
     result: Result<Report, String>,
     source: SourceCheck,
     stages: Stages,
 }
 
 type Copier<'a> = &'a dyn Fn(&Path, &Path) -> io::Result<u64>;
+/// Modification volontaire appliquée à la copie migrée (test de la détection de divergence).
+type Mutation<'a> = &'a dyn Fn(&Connection);
+
+/// Paramètres d'injection de pannes : par défaut, comportement réel.
+struct Options<'a> {
+    copier: Copier<'a>,
+    base: Option<&'a Path>,
+    /// Appelée après la migration, AVANT les contrôles : simule une migration défectueuse.
+    mutate_after_migration: Option<Mutation<'a>>,
+    /// Remplace la liste des migrations (migration défaillante). Longueur = version d'arrivée.
+    migrations: Option<Vec<String>>,
+}
+
+fn default_copier(from: &Path, to: &Path) -> io::Result<u64> {
+    fs::copy(from, to)
+}
+
+impl Default for Options<'_> {
+    fn default() -> Self {
+        Options { copier: &default_copier, base: None, mutate_after_migration: None, migrations: None }
+    }
+}
 
 fn new_work_dir(base: Option<&Path>) -> io::Result<tempfile::TempDir> {
     let mut builder = tempfile::Builder::new();
@@ -463,16 +826,21 @@ fn new_work_dir(base: Option<&Path>) -> io::Result<tempfile::TempDir> {
 }
 
 /// Répétition complète sur une copie temporaire de `source_db`.
-fn rehearse(source_db: &Path) -> Outcome {
-    rehearse_with(source_db, &|from, to| fs::copy(from, to), None)
+fn rehearse(source_db: &Path, plan: Plan) -> Outcome {
+    rehearse_options(source_db, plan, &Options::default())
 }
 
 /// `copier` et `base` sont injectables pour simuler des pannes et observer le nettoyage.
-fn rehearse_with(source_db: &Path, copier: Copier<'_>, base: Option<&Path>) -> Outcome {
+fn rehearse_with(source_db: &Path, plan: Plan, copier: Copier<'_>, base: Option<&Path>) -> Outcome {
+    rehearse_options(source_db, plan, &Options { copier, base, ..Options::default() })
+}
+
+fn rehearse_options(source_db: &Path, plan: Plan, options: &Options<'_>) -> Outcome {
     let before = match SourceSnapshot::capture(source_db) {
         Ok(snapshot) => snapshot,
         Err(error) => {
             return Outcome {
+                plan,
                 result: Err(format!("lecture de la source impossible : {error}")),
                 source: SourceCheck::NotChecked,
                 stages: Stages::default(),
@@ -480,34 +848,99 @@ fn rehearse_with(source_db: &Path, copier: Copier<'_>, base: Option<&Path>) -> O
         }
     };
     let mut stages = Stages::default();
-    let result = run(source_db, &before, copier, base, &mut stages);
+    let result = run(source_db, plan, &before, options, &mut stages);
     // Contrôle final de la source, y compris quand `run` a échoué.
     let source = match SourceSnapshot::capture(source_db) {
         Ok(after) if after == before => SourceCheck::Unchanged,
         Ok(_) => SourceCheck::Different,
         Err(error) => SourceCheck::Unverifiable(error),
     };
-    Outcome { result, source, stages }
+    Outcome { plan, result, source, stages }
+}
+
+/// Aller-retour avec le code de production (schéma v3). Renvoie les identifiants des tâches créées.
+fn round_trip_production(conn: &Connection, target_id: &str, stamp: &mut i64) -> Result<Vec<String>, String> {
+    let mut created = Vec::new();
+    for _ in 0..2 {
+        let current = inbox::get_item(conn, target_id).map_err(|e| e.to_string())?;
+        *stamp += 1;
+        let done = tasks::convert_item(conn, target_id, current.updated_at, None, *stamp)
+            .map_err(|e| format!("conversion : {e}"))?;
+        *stamp += 1;
+        tasks::cancel_conversion(conn, &done.task.id, *stamp).map_err(|e| format!("annulation : {e}"))?;
+        created.push(done.task.id);
+    }
+    Ok(created)
+}
+
+/// Aller-retour en SQL v2 (le code de production cible la v3 et ne s'applique pas à une base v2).
+/// Reproduit exactement les écritures de la brique 002 sur le schéma v2.
+fn round_trip_v2(conn: &Connection, target_id: &str, stamp: &mut i64) -> Result<Vec<String>, String> {
+    let mut created = Vec::new();
+    for n in 0..2 {
+        let (content, destination): (String, Option<String>) = conn
+            .query_row(
+                "SELECT content, destination_id FROM inbox_items WHERE id = ?1 AND deleted_at IS NULL
+                 AND converted_task_id IS NULL",
+                [target_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .map_err(|e| format!("conversion : {e}"))?;
+        let title: String = content.lines().next().unwrap_or("Répétition").chars().take(120).collect();
+        let task_id = format!("repetition-{n}-{target_id}");
+        *stamp += 1;
+        conn.execute(
+            "INSERT INTO tasks (id, title, details, status, destination_id, origin_inbox_item_id,
+                                created_at, updated_at)
+             VALUES (?1, ?2, ?3, 'todo', ?4, ?5, ?6, ?6)",
+            rusqlite::params![task_id, title, content, destination, target_id, *stamp],
+        )
+        .map_err(|e| format!("conversion : {e}"))?;
+        conn.execute(
+            "UPDATE inbox_items SET converted_at = ?2, converted_task_id = ?3 WHERE id = ?1",
+            rusqlite::params![target_id, *stamp, task_id],
+        )
+        .map_err(|e| format!("conversion : {e}"))?;
+        *stamp += 1;
+        conn.execute(
+            "UPDATE tasks SET deleted_at = ?2 WHERE id = ?1 AND deleted_at IS NULL AND updated_at = created_at",
+            rusqlite::params![task_id, *stamp],
+        )
+        .map_err(|e| format!("annulation : {e}"))?;
+        let restored = conn
+            .execute(
+                "UPDATE inbox_items SET converted_at = NULL, converted_task_id = NULL
+                 WHERE id = ?1 AND converted_task_id = ?2",
+                rusqlite::params![target_id, task_id],
+            )
+            .map_err(|e| format!("annulation : {e}"))?;
+        if restored != 1 {
+            return Err("annulation : la capture n'a pas été remise dans la boîte".into());
+        }
+        created.push(task_id);
+    }
+    Ok(created)
 }
 
 fn run(
     source_db: &Path,
+    plan: Plan,
     before: &SourceSnapshot,
-    copier: Copier<'_>,
-    base: Option<&Path>,
+    options: &Options<'_>,
     stages: &mut Stages,
 ) -> Result<Report, String> {
     // `work` est déclaré en premier : il est supprimé en dernier, après la fermeture des connexions.
-    let work = new_work_dir(base).map_err(|e| format!("dossier de travail : {e}"))?;
+    let work = new_work_dir(options.base).map_err(|e| format!("dossier de travail : {e}"))?;
     let db = work.path().join(DB_FILE_NAME);
 
-    // 1. Copie des fichiers présents (sous le MÊME nom pour que `-wal` reste apparié).
+    // 1. Copie des fichiers présents (sous le MÊME nom pour que `-wal` reste apparié). Jamais le
+    //    seul `.db` : une transaction validée peut n'exister que dans `-wal`.
     for (suffix, identity) in &before.files {
         if identity.is_none() {
             continue;
         }
         let target = sibling(&db, suffix);
-        copier(&sibling(source_db, suffix), &target)
+        (options.copier)(&sibling(source_db, suffix), &target)
             .map_err(|e| format!("copie de « {} » : {e}", file_label(suffix)))?;
         // La copie de référence est en lecture seule (procédure PowerShell) et `fs::copy` en
         // propage l'attribut : on le lève sur la copie de TRAVAIL uniquement, la source n'est
@@ -535,38 +968,48 @@ fn run(
         }
     }
 
-    // 2. État v1 de référence (lu sur la copie ; la fermeture reporte -wal dans la copie).
-    let (version_before, reference) = {
+    // 2. État de départ, lu sur la copie (la fermeture reporte -wal dans la copie). La version
+    //    réelle doit être EXACTEMENT celle du plan ; la source doit être cohérente.
+    let reference = {
         let conn = Connection::open(&db).map_err(|e| e.to_string())?;
         let version: u32 = conn
             .pragma_query_value(None, "user_version", |row| row.get(0))
             .map_err(|e| e.to_string())?;
-        if version != 1 {
-            return Err(format!("base en version {version}, la répétition attend une base v1"));
+        if version != plan.from {
+            return Err(format!(
+                "base en version {version} : la répétition demandée attend une base v{}",
+                plan.from
+            ));
         }
-        (version, v1_fingerprints(&conn))
+        check_integrity(&conn).map_err(|e| format!("source incohérente avant migration : {e}"))?;
+        read_snapshot(&conn, version)?
     };
+    let expected = expected_after(&reference, plan.to)
+        .map_err(|e| format!("source incohérente avant migration : {e}"))?;
 
-    // 3. Migration réelle (sauvegarde automatique vérifiée, puis v2).
-    let conn = open(&db).map_err(|e| format!("migration : {e}"))?;
+    // 3. Migration réelle (sauvegarde automatique vérifiée, puis migrations jusqu'à `plan.to`).
+    let migrations: Vec<&str> = match &options.migrations {
+        Some(custom) => custom.iter().map(String::as_str).collect(),
+        None => plan.migrations().to_vec(),
+    };
+    let conn = open_with(&db, &migrations).map_err(|e| format!("migration : {e}"))?;
     let version_after: u32 = conn
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .map_err(|e| e.to_string())?;
-    if v1_fingerprints(&conn) != reference {
-        return Err("les captures ou destinations ont changé pendant la migration".into());
+    if let Some(mutate) = options.mutate_after_migration {
+        mutate(&conn);
     }
-    if single(&conn, "PRAGMA integrity_check") != "ok" {
-        return Err("integrity_check en échec après migration".into());
-    }
-    let broken: i64 = conn
-        .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| r.get(0))
-        .map_err(|e| e.to_string())?;
-    if broken != 0 {
-        return Err(format!("{broken} clé(s) étrangère(s) cassée(s)"));
-    }
+    check_integrity(&conn).map_err(|e| format!("après migration : {e}"))?;
     stages.integrity = true;
+    check_schema(&conn, plan.to).map_err(|e| format!("schéma après migration : {e}"))?;
+    stages.schema = true;
+    let divergences = compare(&expected, &read_snapshot(&conn, plan.to)?);
+    if !divergences.is_empty() {
+        return Err(format!("projection non conforme : {}", describe(&divergences)));
+    }
+    stages.projection = true;
 
-    // 4. Sauvegarde produite : une seule, en v1, au contenu de référence.
+    // 4. Sauvegarde produite : une seule, à la version de départ, à l'état de référence.
     let backups: Vec<PathBuf> = fs::read_dir(backup::backup_dir(&db))
         .map_err(|e| format!("dossier des sauvegardes : {e}"))?
         .flatten()
@@ -577,9 +1020,16 @@ fn run(
     }
     {
         let copy = Connection::open(&backups[0]).map_err(|e| e.to_string())?;
-        let v: u32 = copy.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
-        if v != 1 || v1_fingerprints(&copy) != reference {
-            return Err("la sauvegarde ne correspond pas à l'état v1 de référence".into());
+        let v: u32 = copy.pragma_query_value(None, "user_version", |r| r.get(0)).map_err(|e| e.to_string())?;
+        if v != plan.from {
+            return Err(format!("la sauvegarde est en v{v} au lieu de v{}", plan.from));
+        }
+        let divergences = compare(&reference, &read_snapshot(&copy, v)?);
+        if !divergences.is_empty() {
+            return Err(format!(
+                "la sauvegarde ne correspond pas à l'état de départ : {}",
+                describe(&divergences)
+            ));
         }
     }
     stages.backup = true;
@@ -598,23 +1048,21 @@ fn run(
         }
     };
     let mut stamp = 4_000_000_000_000i64;
-    for _ in 0..2 {
-        let current = inbox::get_item(&conn, &target_id).map_err(|e| e.to_string())?;
-        stamp += 1;
-        let done = tasks::convert_item(&conn, &target_id, current.updated_at, None, stamp)
-            .map_err(|e| format!("conversion : {e}"))?;
-        stamp += 1;
-        tasks::cancel_conversion(&conn, &done.task.id, stamp).map_err(|e| format!("annulation : {e}"))?;
+    let created_tasks = if plan.to >= 3 {
+        round_trip_production(&conn, &target_id, &mut stamp)?
+    } else {
+        round_trip_v2(&conn, &target_id, &mut stamp)?
+    };
+    // Aucun résidu : les tâches de l'essai d'abord (clé étrangère), puis la capture fictive.
+    for task_id in &created_tasks {
+        conn.execute("DELETE FROM tasks WHERE id = ?1", [task_id]).map_err(|e| e.to_string())?;
     }
     if round_trip == RoundTrip::FictitiousCapture {
-        // Aucun résidu : tâches d'abord (clé étrangère), puis la capture fictive elle-même.
-        conn.execute("DELETE FROM tasks WHERE origin_inbox_item_id = ?1", [&target_id])
-            .map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM inbox_items WHERE id = ?1", [&target_id])
-            .map_err(|e| e.to_string())?;
+        conn.execute("DELETE FROM inbox_items WHERE id = ?1", [&target_id]).map_err(|e| e.to_string())?;
     }
-    if v1_fingerprints(&conn) != reference {
-        return Err("l'aller-retour conversion/annulation a modifié des captures".into());
+    let divergences = compare(&expected, &read_snapshot(&conn, plan.to)?);
+    if !divergences.is_empty() {
+        return Err(format!("l'aller-retour a modifié des données : {}", describe(&divergences)));
     }
     // Seulement ici : les conversions et annulations ont réellement été exécutées.
     stages.round_trip = true;
@@ -630,18 +1078,26 @@ fn run(
         }
     }
     fs::copy(&backups[0], &db).map_err(|e| e.to_string())?;
-    let restored = open(&db).map_err(|e| format!("réouverture après restauration : {e}"))?;
-    if v1_fingerprints(&restored) != reference {
-        return Err("la base restaurée diffère de la référence".into());
+    let restored = open_with(&db, plan.migrations()).map_err(|e| format!("réouverture après restauration : {e}"))?;
+    check_integrity(&restored).map_err(|e| format!("après restauration : {e}"))?;
+    let divergences = compare(&expected, &read_snapshot(&restored, plan.to)?);
+    if !divergences.is_empty() {
+        return Err(format!("la base restaurée diffère de l'attendu : {}", describe(&divergences)));
     }
     stages.restore = true;
     let backup_name = backups[0].file_name().unwrap().to_string_lossy().into_owned();
     drop(restored);
 
+    let count = |table: &'static str, rows: &[Row]| (table, rows.len());
     Ok(Report {
-        version_before,
+        plan,
+        version_before: reference.version,
         version_after,
-        tables: reference,
+        tables: vec![
+            count("destinations", &reference.destinations),
+            count("inbox_items", &reference.captures),
+            count("tasks", &reference.tasks),
+        ],
         live_captures,
         round_trip,
         backup: backup_name,
@@ -651,38 +1107,46 @@ fn run(
 
 /// Ligne-marqueur lue par la procédure PowerShell. Vocabulaire FIXE : aucun chemin, aucune
 /// empreinte, aucun texte, aucun message d'erreur ; chaque valeur n'est `OK` que si l'étape
-/// correspondante a réellement été vérifiée.
+/// correspondante a réellement été vérifiée. `from` et `to` sont les versions DEMANDÉES.
 fn marker_line(outcome: &Outcome) -> String {
     let ok_or_fail = |ok: bool| if ok { "OK" } else { "FAIL" };
-    let (from, to) = match &outcome.result {
-        Ok(report) => (report.version_before.to_string(), report.version_after.to_string()),
-        Err(_) => ("?".to_string(), "?".to_string()),
-    };
     let source = match &outcome.source {
         SourceCheck::Unchanged => "OK",
         SourceCheck::Different => "DIFFERENT",
         SourceCheck::Unverifiable(_) => "UNVERIFIABLE",
         SourceCheck::NotChecked => "NOTCHECKED",
     };
-    let status = outcome.result.is_ok() && outcome.source == SourceCheck::Unchanged;
     let stages = outcome.stages;
+    // `OK` global seulement si le résultat est bon, la source intacte ET chaque étape obligatoire
+    // validée : aucune étape ne peut manquer sans faire échouer le tout.
+    let status = outcome.result.is_ok() && outcome.source == SourceCheck::Unchanged && stages.all();
     format!(
-        "REHEARSAL-RESULT status={} from={from} to={to} integrity={} backup={} roundtrip={} restore={} source={source}",
+        "REHEARSAL-RESULT status={} from={} to={} integrity={} schema={} projection={} backup={} roundtrip={} restore={} source={source}",
         ok_or_fail(status),
+        outcome.plan.from,
+        outcome.plan.to,
         ok_or_fail(stages.integrity),
+        ok_or_fail(stages.schema),
+        ok_or_fail(stages.projection),
         ok_or_fail(stages.backup),
         ok_or_fail(stages.round_trip),
         ok_or_fail(stages.restore),
     )
 }
 
-/// Marqueur d'un échec avant toute répétition (variable, garde-fous ou validation).
-const MARKER_NOT_STARTED: &str = "REHEARSAL-RESULT status=FAIL from=? to=? integrity=FAIL backup=FAIL roundtrip=FAIL restore=FAIL source=NOTCHECKED";
+/// Marqueur d'un échec avant toute répétition (variable, plan, garde-fous ou validation).
+const MARKER_NOT_STARTED: &str = "REHEARSAL-RESULT status=FAIL from=? to=? integrity=FAIL schema=FAIL projection=FAIL backup=FAIL roundtrip=FAIL restore=FAIL source=NOTCHECKED";
 
-/// Validation puis répétition : rien n'est créé ni ouvert si la validation échoue.
-fn rehearsal_from_value(raw: Option<OsString>, protected: &Protected) -> Result<Outcome, String> {
-    let path = resolve_source(raw, protected)?;
-    Ok(rehearse(&path))
+/// Validation (plan, puis chemin) puis répétition : rien n'est créé ni ouvert si elle échoue.
+fn rehearsal_from_values(
+    raw_path: Option<OsString>,
+    raw_from: Option<OsString>,
+    raw_to: Option<OsString>,
+    protected: &Protected,
+) -> Result<Outcome, String> {
+    let plan = Plan::from_values(raw_from, raw_to)?;
+    let path = resolve_source(raw_path, protected)?;
+    Ok(rehearse(&path, plan))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -749,6 +1213,11 @@ fn fake_protected() -> (tempfile::TempDir, Protected) {
     let protected =
         Protected::from_roots(&[("%LOCALAPPDATA% fictif".to_string(), root.path().to_path_buf())]).unwrap();
     (root, protected)
+}
+
+/// Validation du chemin avec un plan valide (v1 -> v2) : isole les tests de chemin du plan.
+fn rehearsal_from_value(raw: Option<OsString>, protected: &Protected) -> Result<Outcome, String> {
+    rehearsal_from_values(raw, Some("1".into()), Some("2".into()), protected)
 }
 
 fn dir_is_empty(dir: &Path) -> bool {
@@ -1082,7 +1551,7 @@ fn la_repetition_fonctionne_sans_wal_et_la_source_est_intacte() {
     assert!(!sibling(&path, "-wal").exists(), "fermeture propre : pas de -wal");
     let before = SourceSnapshot::capture(&path).unwrap();
 
-    let outcome = rehearse(&path);
+    let outcome = rehearse(&path, PLAN_V1_V2);
     assert_unchanged(&outcome);
     let report = outcome.result.unwrap();
 
@@ -1124,7 +1593,7 @@ fn sans_capture_active_l_aller_retour_a_lieu_sur_une_capture_fictive_sans_residu
         let (_dir, path) = fictitious_v1_without_active_capture(trashed_only);
         let before = SourceSnapshot::capture(&path).unwrap();
 
-        let outcome = rehearse(&path);
+        let outcome = rehearse(&path, PLAN_V1_V2);
         assert_unchanged(&outcome);
         assert!(outcome.stages.round_trip, "l'aller-retour a réellement été exécuté");
         let report = outcome.result.unwrap();
@@ -1135,8 +1604,8 @@ fn sans_capture_active_l_aller_retour_a_lieu_sur_une_capture_fictive_sans_residu
         assert_eq!(report.tables.iter().find(|t| t.0 == "inbox_items").unwrap().1, expected_rows);
         assert_eq!(SourceSnapshot::capture(&path).unwrap(), before);
         assert_eq!(
-            marker_line(&rehearse(&path)),
-            "REHEARSAL-RESULT status=OK from=1 to=2 integrity=OK backup=OK roundtrip=OK restore=OK source=OK"
+            marker_line(&rehearse(&path, PLAN_V1_V2)),
+            "REHEARSAL-RESULT status=OK from=1 to=2 integrity=OK schema=OK projection=OK backup=OK roundtrip=OK restore=OK source=OK"
         );
     }
 }
@@ -1144,7 +1613,7 @@ fn sans_capture_active_l_aller_retour_a_lieu_sur_une_capture_fictive_sans_residu
 #[test]
 fn avec_des_captures_actives_l_aller_retour_utilise_une_capture_existante() {
     let (_dir, path) = fictitious_v1();
-    let report = rehearse(&path).result.unwrap();
+    let report = rehearse(&path, PLAN_V1_V2).result.unwrap();
     assert_eq!(report.round_trip, RoundTrip::ExistingCapture);
 }
 
@@ -1153,7 +1622,7 @@ fn le_roundtrip_n_est_jamais_declare_quand_il_n_a_pas_eu_lieu() {
     // Échec AVANT l'aller-retour (base déjà migrée) : roundtrip jamais « OK ».
     let (_dir, path) = fictitious_v1_without_active_capture(false);
     drop(open(&path).unwrap());
-    let outcome = rehearse(&path);
+    let outcome = rehearse(&path, PLAN_V1_V2);
     assert!(outcome.result.is_err());
     assert!(!outcome.stages.round_trip);
     assert!(marker_line(&outcome).contains("roundtrip=FAIL"));
@@ -1165,7 +1634,7 @@ fn la_repetition_fonctionne_avec_wal_et_shm_et_ne_les_modifie_pas() {
     let before = SourceSnapshot::capture(&path).unwrap();
     assert!(before.files[1].1.is_some(), "-wal présent");
 
-    let outcome = rehearse(&path);
+    let outcome = rehearse(&path, PLAN_V1_V2);
     assert_unchanged(&outcome);
     let report = outcome.result.unwrap();
     // Les trois captures n'existaient que dans -wal : elles sont bien reprises.
@@ -1188,7 +1657,7 @@ fn une_copie_de_reference_en_lecture_seule_est_repetee_sans_etre_modifiee() {
     }
     let before = SourceSnapshot::capture(&path).unwrap();
 
-    let outcome = rehearse(&path);
+    let outcome = rehearse(&path, PLAN_V1_V2);
     assert_unchanged(&outcome);
     assert!(outcome.result.is_ok(), "{:?}", outcome.result);
     assert_eq!(SourceSnapshot::capture(&path).unwrap(), before);
@@ -1208,10 +1677,10 @@ fn une_copie_de_reference_en_lecture_seule_est_repetee_sans_etre_modifiee() {
 #[test]
 fn la_repetition_refuse_une_base_qui_n_est_pas_en_v1_sans_toucher_la_source() {
     let (_dir, path) = fictitious_v1();
-    drop(open(&path).unwrap()); // migrée en v2 par l'application fictive
+    drop(open(&path).unwrap()); // migrée jusqu'à la version courante par l'application fictive
     let before = SourceSnapshot::capture(&path).unwrap();
-    let outcome = rehearse(&path);
-    assert!(outcome.result.as_ref().unwrap_err().contains("version 2"));
+    let outcome = rehearse(&path, PLAN_V1_V2);
+    assert!(outcome.result.as_ref().unwrap_err().contains("version 3"));
     assert_unchanged(&outcome);
     assert_eq!(SourceSnapshot::capture(&path).unwrap(), before);
 }
@@ -1229,7 +1698,7 @@ fn un_echec_de_copie_est_signale_source_intacte_et_travail_nettoye() {
             fs::copy(from, to)
         }
     };
-    let outcome = rehearse_with(&path, &failing, Some(base.path()));
+    let outcome = rehearse_with(&path, PLAN_V1_V2, &failing, Some(base.path()));
 
     let error = outcome.result.unwrap_err();
     assert!(error.contains("-wal") && error.contains("panne simulée"), "{error}");
@@ -1250,7 +1719,7 @@ fn une_source_modifiee_pendant_la_copie_est_detectee() {
         fs::write(from, bytes)?;
         Ok(copied)
     };
-    let outcome = rehearse_with(&path, &racing, Some(base.path()));
+    let outcome = rehearse_with(&path, PLAN_V1_V2, &racing, Some(base.path()));
     assert!(outcome.result.unwrap_err().contains("changé pendant la copie"));
     assert_eq!(outcome.source, SourceCheck::Different, "la différence est signalée explicitement");
     assert!(dir_is_empty(base.path()));
@@ -1267,7 +1736,7 @@ fn une_copie_infidele_est_refusee_avant_toute_ouverture_sqlite() {
         fs::write(to, bytes)?;
         Ok(copied)
     };
-    let outcome = rehearse_with(&path, &corrupting, Some(base.path()));
+    let outcome = rehearse_with(&path, PLAN_V1_V2, &corrupting, Some(base.path()));
     assert!(outcome.result.unwrap_err().contains("SHA-256"));
     assert_eq!(outcome.source, SourceCheck::Unchanged);
     assert!(dir_is_empty(base.path()));
@@ -1279,23 +1748,28 @@ fn une_source_illisible_n_est_pas_verifiee_et_rien_n_est_cree() {
     let base = tempfile::tempdir().unwrap();
     let as_dir = dir.path().join(DB_FILE_NAME);
     fs::create_dir(&as_dir).unwrap(); // « morganiser.db » est un dossier
-    let outcome = rehearse_with(&as_dir, &|f, t| fs::copy(f, t), Some(base.path()));
+    let outcome = rehearse_with(&as_dir, PLAN_V1_V2, &|f, t| fs::copy(f, t), Some(base.path()));
     assert!(outcome.result.is_err());
     assert_eq!(outcome.source, SourceCheck::NotChecked);
     assert!(dir_is_empty(base.path()), "aucun dossier de travail créé");
 }
 
 #[test]
-fn les_empreintes_logiques_distinguent_deux_contenus_et_reconnaissent_deux_copies() {
-    // Ces empreintes (FNV, lignes SQLite) servent à comparer l'état logique avant/après migration ;
-    // elles sont distinctes des SHA-256 de fichiers.
+fn l_etat_logique_distingue_deux_contenus_et_reconnait_deux_copies() {
+    // Les instantanés structurels (valeurs réelles) remplacent les anciennes empreintes FNV.
     let (_dir_a, a) = fictitious_v1();
     let (_dir_b, b) = fictitious_v1();
     let conn_a = Connection::open(&a).unwrap();
     let conn_b = Connection::open(&b).unwrap();
-    assert_eq!(v1_fingerprints(&conn_a), v1_fingerprints(&conn_b));
+    let snap_a = read_snapshot(&conn_a, 1).unwrap();
+    assert!(compare(&snap_a, &read_snapshot(&conn_b, 1).unwrap()).is_empty());
     conn_b.execute("UPDATE inbox_items SET content = content || ' ' WHERE id = 'f0'", []).unwrap();
-    assert_ne!(v1_fingerprints(&conn_a), v1_fingerprints(&conn_b));
+    let divergences = compare(&snap_a, &read_snapshot(&conn_b, 1).unwrap());
+    assert_eq!(divergences.len(), 1);
+    assert_eq!(
+        (divergences[0].table, divergences[0].id.as_str(), divergences[0].field.as_str()),
+        ("inbox_items", "f0", "content")
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1309,8 +1783,10 @@ fn assert_fixed_vocabulary(line: &str) {
     for part in parts {
         let (key, value) = part.split_once('=').expect("jeton clé=valeur");
         let allowed: &[&str] = match key {
-            "status" | "integrity" | "backup" | "roundtrip" | "restore" => &["OK", "FAIL"],
-            "from" | "to" => &["1", "2", "?"],
+            "status" | "integrity" | "schema" | "projection" | "backup" | "roundtrip" | "restore" => {
+                &["OK", "FAIL"]
+            }
+            "from" | "to" => &["1", "2", "3", "?"],
             "source" => &["OK", "DIFFERENT", "UNVERIFIABLE", "NOTCHECKED"],
             other => panic!("clé inattendue : {other}"),
         };
@@ -1321,10 +1797,10 @@ fn assert_fixed_vocabulary(line: &str) {
 #[test]
 fn le_marqueur_de_reussite_est_exact_et_a_vocabulaire_fixe() {
     let (_dir, path) = fictitious_v1_with_wal();
-    let line = marker_line(&rehearse(&path));
+    let line = marker_line(&rehearse(&path, PLAN_V1_V2));
     assert_eq!(
         line,
-        "REHEARSAL-RESULT status=OK from=1 to=2 integrity=OK backup=OK roundtrip=OK restore=OK source=OK"
+        "REHEARSAL-RESULT status=OK from=1 to=2 integrity=OK schema=OK projection=OK backup=OK roundtrip=OK restore=OK source=OK"
     );
     assert_fixed_vocabulary(&line);
     assert_fixed_vocabulary(MARKER_NOT_STARTED);
@@ -1337,10 +1813,10 @@ fn le_marqueur_d_echec_ne_valide_que_les_etapes_atteintes() {
     // Échec dès la copie : aucune étape vérifiée, aucun message brut dans le marqueur.
     let (_dir, path) = fictitious_v1_with_wal();
     let failing = |_: &Path, _: &Path| -> io::Result<u64> { Err(io::Error::other(r"C:\Users\secret\chemin")) };
-    let line = marker_line(&rehearse_with(&path, &failing, Some(base.path())));
+    let line = marker_line(&rehearse_with(&path, PLAN_V1_V2, &failing, Some(base.path())));
     assert_eq!(
         line,
-        "REHEARSAL-RESULT status=FAIL from=? to=? integrity=FAIL backup=FAIL roundtrip=FAIL restore=FAIL source=OK"
+        "REHEARSAL-RESULT status=FAIL from=1 to=2 integrity=FAIL schema=FAIL projection=FAIL backup=FAIL roundtrip=FAIL restore=FAIL source=OK"
     );
     assert!(!line.contains("secret") && !line.contains('\\'), "{line}");
     assert_fixed_vocabulary(&line);
@@ -1348,8 +1824,8 @@ fn le_marqueur_d_echec_ne_valide_que_les_etapes_atteintes() {
     // Base déjà migrée : refus avant la migration, source intacte.
     let (_d2, migrated) = fictitious_v1();
     drop(open(&migrated).unwrap());
-    let line = marker_line(&rehearse(&migrated));
-    assert!(line.starts_with("REHEARSAL-RESULT status=FAIL from=? to=? integrity=FAIL"), "{line}");
+    let line = marker_line(&rehearse(&migrated, PLAN_V1_V2));
+    assert!(line.starts_with("REHEARSAL-RESULT status=FAIL from=1 to=2 integrity=FAIL"), "{line}");
     assert!(line.ends_with("source=OK"), "{line}");
     assert_fixed_vocabulary(&line);
 
@@ -1362,7 +1838,7 @@ fn le_marqueur_d_echec_ne_valide_que_les_etapes_atteintes() {
         fs::write(from, bytes)?;
         Ok(copied)
     };
-    let line = marker_line(&rehearse_with(&racing_path, &racing, Some(base.path())));
+    let line = marker_line(&rehearse_with(&racing_path, PLAN_V1_V2, &racing, Some(base.path())));
     assert!(line.starts_with("REHEARSAL-RESULT status=FAIL"), "{line}");
     assert!(line.ends_with("source=DIFFERENT"), "{line}");
     assert_fixed_vocabulary(&line);
@@ -1371,7 +1847,7 @@ fn le_marqueur_d_echec_ne_valide_que_les_etapes_atteintes() {
     let dir = tempfile::tempdir().unwrap();
     let as_dir = dir.path().join(DB_FILE_NAME);
     fs::create_dir(&as_dir).unwrap();
-    let line = marker_line(&rehearse(&as_dir));
+    let line = marker_line(&rehearse(&as_dir, PLAN_V1_V2));
     assert!(line.ends_with("source=NOTCHECKED"), "{line}");
     assert_fixed_vocabulary(&line);
 }
@@ -1384,7 +1860,7 @@ fn le_marqueur_d_echec_ne_valide_que_les_etapes_atteintes() {
 fn le_dossier_de_travail_est_supprime_apres_une_reussite() {
     let (_dir, path) = fictitious_v1();
     let base = tempfile::tempdir().unwrap();
-    let outcome = rehearse_with(&path, &|f, t| fs::copy(f, t), Some(base.path()));
+    let outcome = rehearse_with(&path, PLAN_V1_V2, &|f, t| fs::copy(f, t), Some(base.path()));
     assert!(outcome.result.is_ok());
     assert!(dir_is_empty(base.path()), "réussite : plus aucun dossier morganiser-rehearsal-*");
 }
@@ -1464,7 +1940,7 @@ fn un_arret_brutal_laisse_le_dossier_de_travail() {
 // ---------------------------------------------------------------------------------------------
 
 #[test]
-#[ignore = "répétition sur une copie isolée : définir MORGANISER_REHEARSAL_DB (voir l'en-tête du fichier)"]
+#[ignore = "répétition sur une copie isolée : définir MORGANISER_REHEARSAL_DB, _FROM et _TO (voir l'en-tête du fichier)"]
 fn repetition_sur_copie_isolee() {
     // Avec `--nocapture`, la première ligne suivrait « test … ... » : on la passe, pour que
     // chaque ligne utile (dont le marqueur) soit seule sur sa ligne.
@@ -1473,7 +1949,12 @@ fn repetition_sur_copie_isolee() {
         println!("{MARKER_NOT_STARTED}");
         panic!("garde-fous indisponibles, aucun essai : {reason}");
     });
-    let outcome = match rehearsal_from_value(std::env::var_os(ENV_VAR), &protected) {
+    let outcome = match rehearsal_from_values(
+        std::env::var_os(ENV_VAR),
+        std::env::var_os(ENV_FROM),
+        std::env::var_os(ENV_TO),
+        &protected,
+    ) {
         Ok(outcome) => outcome,
         Err(reason) => {
             println!("{MARKER_NOT_STARTED}");
@@ -1485,9 +1966,10 @@ fn repetition_sur_copie_isolee() {
     match &outcome.result {
         Ok(report) => {
             println!("Répétition réussie (aucun texte, chemin ni empreinte affiché).");
+            println!("  versions demandées : v{} -> v{}", report.plan.from, report.plan.to);
             println!("  version : v{} -> v{}", report.version_before, report.version_after);
-            for (table, count, _) in &report.tables {
-                println!("  {table}: {count} ligne(s), contenu identique à la référence après migration");
+            for (table, count) in &report.tables {
+                println!("  {table}: {count} ligne(s) à l'état de départ, projection attendue vérifiée après migration");
             }
             println!("  captures actives : {}", report.live_captures);
             println!(
@@ -1503,7 +1985,7 @@ fn repetition_sur_copie_isolee() {
                 println!("  {} dans la source : {}", file_label(suffix), if *present { "présent" } else { "absent" });
             }
             println!("  copie temporaire fidèle à la source (SHA-256) : OK");
-            println!("  conversion/annulation/reconversion : OK ; restauration : OK");
+            println!("  intégrité, clés étrangères, schéma, projection : OK ; restauration : OK");
         }
         Err(error) => println!("Répétition EN ÉCHEC : {error}"),
     }
@@ -1511,4 +1993,527 @@ fn repetition_sur_copie_isolee() {
     println!("{}", marker_line(&outcome));
     assert!(outcome.result.is_ok(), "répétition en échec (voir le message ci-dessus)");
     assert_eq!(outcome.source, SourceCheck::Unchanged, "les fichiers source ne doivent pas changer");
+}
+
+// ---------------------------------------------------------------------------------------------
+// 003-B1c : répétition v2 → v3 (et chaînage v1 → v3), sur bases FICTIVES uniquement
+// ---------------------------------------------------------------------------------------------
+
+use super::rebuild_proof_tests::{seed as seed_v2, v2_cancel, v2_capture, v2_convert};
+
+/// Base v2 fictive, fermée proprement (en général sans `-wal`).
+fn fictitious_v2() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(DB_FILE_NAME);
+    {
+        let mut conn = Connection::open(&path).unwrap();
+        configure(&conn).unwrap();
+        migrate_with(&mut conn, &MIGRATIONS[..2]).unwrap();
+        seed_v2(&conn);
+    }
+    (dir, path)
+}
+
+/// Base v2 fictive avec `-wal` et `-shm` non vidés : les transactions validées n'existent que dans
+/// `-wal`, comme après un arrêt brutal. Copiée pendant que la connexion d'origine est ouverte.
+fn fictitious_v2_with_wal() -> (tempfile::TempDir, PathBuf) {
+    let origin = tempfile::tempdir().unwrap();
+    let live = origin.path().join(DB_FILE_NAME);
+    let mut conn = Connection::open(&live).unwrap();
+    configure(&conn).unwrap();
+    conn.pragma_update(None, "wal_autocheckpoint", 0).unwrap();
+    migrate_with(&mut conn, &MIGRATIONS[..2]).unwrap();
+    seed_v2(&conn);
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(DB_FILE_NAME);
+    for suffix in SUFFIXES {
+        let from = sibling(&live, suffix);
+        if from.is_file() {
+            fs::copy(&from, sibling(&path, suffix)).unwrap();
+        }
+    }
+    drop(conn);
+    assert!(fs::metadata(sibling(&path, "-wal")).unwrap().len() > 0, "le -wal fictif doit contenir des données");
+    (dir, path)
+}
+
+/// Base v2 SANS capture active : toutes les captures sont converties ou à la corbeille.
+fn fictitious_v2_without_active_capture() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join(DB_FILE_NAME);
+    {
+        let mut conn = Connection::open(&path).unwrap();
+        configure(&conn).unwrap();
+        migrate_with(&mut conn, &MIGRATIONS[..2]).unwrap();
+        v2_capture(&conn, "a", "Convertie", Some("moi"), 1);
+        v2_convert(&conn, "ta", "a", "Convertie", 10);
+        v2_capture(&conn, "b", "Annulée puis convertie", Some("finances"), 2);
+        v2_convert(&conn, "tb1", "b", "Annulée", 11);
+        v2_cancel(&conn, "tb1", 12);
+        v2_convert(&conn, "tb2", "b", "Reconvertie", 13);
+        v2_capture(&conn, "c", "À la corbeille", None, 3);
+        conn.execute("UPDATE inbox_items SET deleted_at = 99 WHERE id = 'c'", []).unwrap();
+    }
+    (dir, path)
+}
+
+/// Base v2 incohérente : une tâche référence une destination qui n'existe pas (clés étrangères
+/// désactivées le temps de la corrompre, comme une base ancienne ou réparée à la main).
+fn fictitious_v2_inconsistent() -> (tempfile::TempDir, PathBuf) {
+    let (dir, path) = fictitious_v2();
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.pragma_update(None, "foreign_keys", false).unwrap();
+        conn.execute(
+            "INSERT INTO tasks (id, title, details, destination_id, created_at, updated_at)
+             VALUES ('orpheline', 'Destination perdue', 'x', 'disparue', 1, 1)",
+            [],
+        )
+        .unwrap();
+    }
+    (dir, path)
+}
+
+const MARKER_V2_V3_OK: &str = "REHEARSAL-RESULT status=OK from=2 to=3 integrity=OK schema=OK projection=OK backup=OK roundtrip=OK restore=OK source=OK";
+
+#[test]
+fn v2_vers_v3_projection_conforme_et_source_intacte() {
+    let (_dir, path) = fictitious_v2();
+    assert!(!sibling(&path, "-wal").exists(), "fermeture propre : pas de -wal");
+    let before = SourceSnapshot::capture(&path).unwrap();
+
+    let outcome = rehearse(&path, PLAN_V2_V3);
+    assert_unchanged(&outcome);
+    assert!(
+        outcome.stages.integrity
+            && outcome.stages.schema
+            && outcome.stages.projection
+            && outcome.stages.backup
+            && outcome.stages.round_trip
+            && outcome.stages.restore
+    );
+    assert_eq!(marker_line(&outcome), MARKER_V2_V3_OK);
+    let report = outcome.result.unwrap();
+
+    assert_eq!((report.version_before, report.version_after), (2, 3));
+    assert_eq!(report.plan, PLAN_V2_V3);
+    let count = |table: &str| report.tables.iter().find(|t| t.0 == table).unwrap().1;
+    assert_eq!((count("destinations"), count("inbox_items"), count("tasks")), (5, 8, 8));
+    assert_eq!(report.live_captures, 1); // c8 seule est à organiser
+    assert_eq!(report.round_trip, RoundTrip::ExistingCapture);
+    assert!(report.backup.starts_with("morganiser-v2-"), "{}", report.backup);
+    assert_eq!(report.present, vec![("", true), ("-wal", false), ("-shm", false)]);
+    assert_eq!(SourceSnapshot::capture(&path).unwrap(), before);
+}
+
+#[test]
+fn v2_vers_v3_avec_wal_et_shm_les_transactions_du_wal_sont_reprises_sans_modifier_la_source() {
+    let (_dir, path) = fictitious_v2_with_wal();
+    let before = SourceSnapshot::capture(&path).unwrap();
+    assert!(before.files[1].1.is_some(), "-wal présent");
+
+    let outcome = rehearse(&path, PLAN_V2_V3);
+    assert_unchanged(&outcome);
+    assert_eq!(marker_line(&outcome), MARKER_V2_V3_OK);
+    let report = outcome.result.unwrap();
+    // Tout n'existait que dans -wal : les 8 tâches sont bien reprises.
+    assert_eq!(report.tables.iter().find(|t| t.0 == "tasks").unwrap().1, 8);
+    assert!(report.present[1].1, "-wal signalé présent");
+    assert_eq!(SourceSnapshot::capture(&path).unwrap(), before, "-wal et -shm intacts, octet pour octet");
+}
+
+#[test]
+fn copier_le_seul_db_perdrait_les_transactions_du_wal() {
+    // Justifie la règle « jamais le .db seul » : la copie du seul fichier principal est incohérente.
+    let (_dir, path) = fictitious_v2_with_wal();
+    let lonely = tempfile::tempdir().unwrap();
+    let copy = lonely.path().join(DB_FILE_NAME);
+    fs::copy(&path, &copy).unwrap();
+    let conn = Connection::open(&copy).unwrap();
+    let version: u32 = conn.pragma_query_value(None, "user_version", |r| r.get(0)).unwrap();
+    assert_ne!(version, 2, "le .db seul ne contient pas le schéma v2 validé dans -wal");
+    drop(conn);
+    // Alors que la répétition, qui copie les trois fichiers ensemble, voit bien la v2.
+    assert!(rehearse(&path, PLAN_V2_V3).result.is_ok());
+}
+
+#[test]
+fn v2_sans_capture_active_l_aller_retour_a_lieu_sur_une_capture_fictive_sans_residu() {
+    let (_dir, path) = fictitious_v2_without_active_capture();
+    let before = SourceSnapshot::capture(&path).unwrap();
+    let outcome = rehearse(&path, PLAN_V2_V3);
+    assert_unchanged(&outcome);
+    assert!(outcome.stages.round_trip, "l'aller-retour a réellement été exécuté");
+    let report = outcome.result.unwrap();
+    assert_eq!(report.live_captures, 0);
+    assert_eq!(report.round_trip, RoundTrip::FictitiousCapture);
+    // L'état de départ est intact : 3 captures, 3 tâches, aucune capture ni tâche fictive restante.
+    let count = |table: &str| report.tables.iter().find(|t| t.0 == table).unwrap().1;
+    assert_eq!((count("inbox_items"), count("tasks")), (3, 3));
+    assert_eq!(SourceSnapshot::capture(&path).unwrap(), before);
+    assert_eq!(marker_line(&rehearse(&path, PLAN_V2_V3)), MARKER_V2_V3_OK);
+}
+
+#[test]
+fn v1_vers_v3_enchaine_les_deux_migrations_avec_une_seule_sauvegarde() {
+    let (_dir, path) = fictitious_v1_with_wal();
+    let before = SourceSnapshot::capture(&path).unwrap();
+    let outcome = rehearse(&path, PLAN_V1_V3);
+    assert_unchanged(&outcome);
+    assert_eq!(
+        marker_line(&outcome),
+        "REHEARSAL-RESULT status=OK from=1 to=3 integrity=OK schema=OK projection=OK backup=OK roundtrip=OK restore=OK source=OK"
+    );
+    let report = outcome.result.unwrap();
+    assert_eq!((report.version_before, report.version_after), (1, 3));
+    assert!(report.backup.starts_with("morganiser-v1-"));
+    let count = |table: &str| report.tables.iter().find(|t| t.0 == table).unwrap().1;
+    assert_eq!((count("inbox_items"), count("tasks")), (3, 0));
+    assert_eq!(SourceSnapshot::capture(&path).unwrap(), before);
+}
+
+#[test]
+fn v1_vers_v2_reste_repetable_sans_regression() {
+    // Même scénario que la brique 002, avec les versions maintenant explicites.
+    let (_dir, path) = fictitious_v1();
+    let outcome = rehearse(&path, PLAN_V1_V2);
+    assert_unchanged(&outcome);
+    assert_eq!(
+        marker_line(&outcome),
+        "REHEARSAL-RESULT status=OK from=1 to=2 integrity=OK schema=OK projection=OK backup=OK roundtrip=OK restore=OK source=OK"
+    );
+    assert_eq!(outcome.result.unwrap().version_after, 2);
+}
+
+// --- Refus : versions, plans, source ---------------------------------------------------------
+
+#[test]
+fn les_plans_non_pris_en_charge_sont_refuses_avant_toute_creation() {
+    for (from, to) in [(3, 2), (1, 1), (2, 2), (3, 3), (0, 1), (0, 3), (1, 4), (2, 4), (2, 1), (4, 5)] {
+        let error = Plan::new(from, to).unwrap_err();
+        assert!(error.contains("non prise en charge"), "v{from} -> v{to} : {error}");
+    }
+    for plan in SUPPORTED_PLANS {
+        assert_eq!(Plan::new(plan.from, plan.to), Ok(plan));
+    }
+}
+
+#[test]
+fn les_versions_sont_explicites_et_une_valeur_invalide_est_un_echec() {
+    let some = |s: &str| Some(OsString::from(s));
+    assert_eq!(Plan::from_values(some("2"), some("3")), Ok(PLAN_V2_V3));
+    assert_eq!(Plan::from_values(some(" 1 "), some("2")), Ok(PLAN_V1_V2));
+    for (from, to) in [
+        (None, some("3")),
+        (some("2"), None),
+        (some(""), some("3")),
+        (some("deux"), some("3")),
+        (some("2"), some("3.0")),
+        (some("-1"), some("3")),
+        (some("2"), some("trois")),
+    ] {
+        assert!(Plan::from_values(from.clone(), to.clone()).is_err(), "{from:?} -> {to:?}");
+    }
+    // Messages sans chemin ni valeur personnelle.
+    let message = Plan::from_values(some("2"), None).unwrap_err();
+    assert!(message.contains(ENV_TO) && !message.contains('\\'));
+}
+
+#[test]
+fn une_base_de_mauvaise_version_est_refusee_sans_toucher_la_source() {
+    let base = tempfile::tempdir().unwrap();
+    // v1 demandée comme v2, v2 demandée comme v1, base déjà en v3 demandée comme v2.
+    let (_d1, v1) = fictitious_v1();
+    let (_d2, v2) = fictitious_v2();
+    let (_d3, v3) = fictitious_v2();
+    drop(open(&v3).unwrap());
+    for (path, plan, expected) in [
+        (&v1, PLAN_V2_V3, "attend une base v2"),
+        (&v2, PLAN_V1_V2, "attend une base v1"),
+        (&v2, PLAN_V1_V3, "attend une base v1"),
+        (&v3, PLAN_V2_V3, "attend une base v2"),
+    ] {
+        let before = SourceSnapshot::capture(path).unwrap();
+        let outcome = rehearse_with(path, plan, &|f, t| fs::copy(f, t), Some(base.path()));
+        let error = outcome.result.as_ref().unwrap_err();
+        assert!(error.contains(expected), "{error}");
+        assert_unchanged(&outcome);
+        assert_eq!(SourceSnapshot::capture(path).unwrap(), before);
+        assert!(!outcome.stages.integrity && !outcome.stages.projection && !outcome.stages.restore);
+        let line = marker_line(&outcome);
+        assert!(line.starts_with("REHEARSAL-RESULT status=FAIL"), "{line}");
+        assert!(line.contains("projection=FAIL") && line.ends_with("source=OK"), "{line}");
+        assert!(dir_is_empty(base.path()), "dossier de travail supprimé");
+    }
+}
+
+#[test]
+fn une_source_incoherente_est_refusee_avant_toute_migration() {
+    let base = tempfile::tempdir().unwrap();
+    let (_dir, path) = fictitious_v2_inconsistent();
+    let before = SourceSnapshot::capture(&path).unwrap();
+
+    let outcome = rehearse_with(&path, PLAN_V2_V3, &|f, t| fs::copy(f, t), Some(base.path()));
+    let error = outcome.result.as_ref().unwrap_err();
+    assert!(error.contains("source incohérente avant migration"), "{error}");
+    assert_unchanged(&outcome);
+    assert_eq!(SourceSnapshot::capture(&path).unwrap(), before);
+    assert!(!outcome.stages.integrity, "aucune migration tentée, donc aucune étape validée");
+    assert!(marker_line(&outcome).starts_with("REHEARSAL-RESULT status=FAIL from=2 to=3 integrity=FAIL"));
+    assert!(dir_is_empty(base.path()));
+}
+
+// --- Pannes et divergences -------------------------------------------------------------------
+
+#[test]
+fn une_panne_en_cours_de_migration_ne_valide_rien_et_laisse_la_source_intacte() {
+    let (_dir, path) = fictitious_v2_with_wal();
+    let before = SourceSnapshot::capture(&path).unwrap();
+    let base = tempfile::tempdir().unwrap();
+    // Migration 0003 de production, interrompue AVANT la restauration des liens.
+    let production = MIGRATIONS[2];
+    let cut = production.find("-- @stage: restore").expect("marqueur d'étape");
+    let failing = format!("{}\nSELECT * FROM panne_volontaire_inexistante;\n", &production[..cut]);
+    let options = Options {
+        base: Some(base.path()),
+        migrations: Some(vec![MIGRATIONS[0].to_string(), MIGRATIONS[1].to_string(), failing]),
+        ..Options::default()
+    };
+
+    let outcome = rehearse_options(&path, PLAN_V2_V3, &options);
+    let error = outcome.result.as_ref().unwrap_err();
+    assert!(error.starts_with("migration :"), "{error}");
+    assert_unchanged(&outcome);
+    assert_eq!(SourceSnapshot::capture(&path).unwrap(), before);
+    assert!(!outcome.stages.integrity && !outcome.stages.projection && !outcome.stages.backup);
+    assert!(marker_line(&outcome).contains("status=FAIL"));
+    assert!(dir_is_empty(base.path()));
+}
+
+fn run_with_mutation(mutate: impl Fn(&Connection)) -> Outcome {
+    let (_dir, path) = fictitious_v2();
+    let base = tempfile::tempdir().unwrap();
+    let options = Options { base: Some(base.path()), mutate_after_migration: Some(&mutate), ..Options::default() };
+    let outcome = rehearse_options(&path, PLAN_V2_V3, &options);
+    assert_unchanged(&outcome);
+    assert!(dir_is_empty(base.path()));
+    outcome
+}
+
+#[test]
+fn une_valeur_modifiee_apres_migration_est_detectee_sans_reveler_de_texte() {
+    // Description d'une tâche altérée : la migration « termine sans erreur », la comparaison échoue.
+    let outcome = run_with_mutation(|conn| {
+        conn.execute(
+            "UPDATE tasks SET details = details || ' ALTÉRÉ', updated_at = updated_at + 1 WHERE id = 't1'",
+            [],
+        )
+        .unwrap();
+    });
+    let error = outcome.result.as_ref().unwrap_err();
+    assert!(error.starts_with("projection non conforme"), "{error}");
+    assert!(error.contains("tasks#t1.details") && error.contains("tasks#t1.updated_at"), "{error}");
+    // Jamais le contenu : ni le texte d'origine ni la valeur altérée.
+    for secret in ["Appeler la banque", "Demander le relevé", "ALTÉRÉ"] {
+        assert!(!error.contains(secret), "le message ne doit contenir aucun texte : {error}");
+    }
+    assert!(outcome.stages.integrity && outcome.stages.schema && !outcome.stages.projection);
+    let line = marker_line(&outcome);
+    assert!(line.contains("integrity=OK schema=OK projection=FAIL") && line.contains("status=FAIL"), "{line}");
+}
+
+#[test]
+fn un_mauvais_classement_un_lien_perdu_et_une_ligne_supprimee_sont_detectes() {
+    let wrong_dimension = run_with_mutation(|conn| {
+        // t1 était une rubrique « finances » : la placer dans l'univers est une erreur de projection.
+        conn.execute(
+            "UPDATE tasks SET section_id = NULL, responsibility_id = 'moi', updated_at = updated_at + 1
+             WHERE id = 't1'",
+            [],
+        )
+        .unwrap();
+    });
+    let error = wrong_dimension.result.unwrap_err();
+    assert!(error.contains("tasks#t1.responsibility_id") && error.contains("tasks#t1.section_id"), "{error}");
+
+    let lost_link = run_with_mutation(|conn| {
+        conn.execute("UPDATE inbox_items SET converted_task_id = NULL WHERE id = 'c1'", []).unwrap();
+    });
+    assert!(lost_link.result.unwrap_err().contains("inbox_items.liens#c1.converted_task_id"));
+
+    let lost_row = run_with_mutation(|conn| {
+        conn.execute("UPDATE inbox_items SET converted_task_id = NULL WHERE id = 'c4'", []).unwrap();
+        conn.execute("DELETE FROM tasks WHERE id = 't4'", []).unwrap();
+    });
+    assert!(lost_row.result.unwrap_err().contains("tasks#t4.ligne absente"));
+
+    let invented_default = run_with_mutation(|conn| {
+        // « Moi » attribué à une tâche non classée : exactement l'erreur à ne jamais commettre.
+        conn.execute(
+            "UPDATE tasks SET responsibility_id = 'moi', updated_at = updated_at + 1 WHERE id = 't4'",
+            [],
+        )
+        .unwrap();
+    });
+    assert!(invented_default.result.unwrap_err().contains("tasks#t4.responsibility_id"));
+}
+
+#[test]
+fn une_source_v2_modifiee_pendant_la_copie_est_refusee() {
+    let (_dir, path) = fictitious_v2();
+    let base = tempfile::tempdir().unwrap();
+    let racing = |from: &Path, to: &Path| -> io::Result<u64> {
+        let copied = fs::copy(from, to)?;
+        let mut bytes = fs::read(from)?;
+        bytes[200] ^= 0xFF;
+        fs::write(from, bytes)?;
+        Ok(copied)
+    };
+    let outcome = rehearse_with(&path, PLAN_V2_V3, &racing, Some(base.path()));
+    assert!(outcome.result.as_ref().unwrap_err().contains("changé pendant la copie"));
+    assert_eq!(outcome.source, SourceCheck::Different);
+    assert!(marker_line(&outcome).ends_with("source=DIFFERENT"));
+    assert!(dir_is_empty(base.path()));
+}
+
+// --- La projection attendue et la comparaison ------------------------------------------------
+
+#[test]
+fn la_projection_attendue_est_calculee_en_rust_selon_la_nature_des_destinations() {
+    let (_dir, path) = fictitious_v2();
+    let conn = Connection::open(&path).unwrap();
+    let before = read_snapshot(&conn, 2).unwrap();
+    let expected = expected_after(&before, 3).unwrap();
+    assert_eq!(expected.version, 3);
+
+    let column = |name: &str| TASK_COLUMNS_V3.iter().position(|c| *c == name).unwrap();
+    let task = |id: &str| expected.tasks.iter().find(|r| r[0] == Value::Text(id.into())).unwrap();
+    let text = |s: &str| Value::Text(s.into());
+    // t1 : rubrique finances ; t2 : univers « externe » (archivé) ; t6 : rubrique « inventaire »
+    // (archivée) ; t4 : non classée ; tâche directe : univers « moi ».
+    assert_eq!((&task("t1")[column("responsibility_id")], &task("t1")[column("section_id")]), (&Value::Null, &text("finances")));
+    assert_eq!((&task("t2")[column("responsibility_id")], &task("t2")[column("section_id")]), (&text("externe"), &Value::Null));
+    assert_eq!((&task("t6")[column("responsibility_id")], &task("t6")[column("section_id")]), (&Value::Null, &text("inventaire")));
+    assert_eq!((&task("t4")[column("responsibility_id")], &task("t4")[column("section_id")]), (&Value::Null, &Value::Null));
+    assert_eq!((&task("directe-1")[column("responsibility_id")], &task("directe-1")[column("section_id")]), (&text("moi"), &Value::Null));
+    // Colonnes nouvelles : jamais inventées.
+    for row in &expected.tasks {
+        for name in ["start_date", "due_date", "completed_on", "priority"] {
+            assert_eq!(row[column(name)], Value::Null, "{name}");
+        }
+    }
+    // Description, titre, statut, provenance et dates identiques à la v2.
+    let old = before.tasks.iter().find(|r| r[0] == text("t3")).unwrap();
+    let new = task("t3");
+    assert_eq!((&new[1], &new[2], &new[3]), (&old[1], &old[2], &old[3]));
+    assert_eq!((&new[column("origin_inbox_item_id")], &new[column("deleted_at")]), (&old[5], &old[8]));
+    // Les liens et les captures sont repris tels quels.
+    assert_eq!((&expected.links, &expected.captures), (&before.links, &before.captures));
+}
+
+#[test]
+fn une_destination_inconnue_rend_la_projection_impossible_plutot_que_de_deviner() {
+    let (_dir, path) = fictitious_v2_inconsistent();
+    let conn = Connection::open(&path).unwrap();
+    let before = read_snapshot(&conn, 2).unwrap();
+    assert!(expected_after(&before, 3).is_err());
+}
+
+#[test]
+fn la_comparaison_decrit_les_divergences_sans_contenu() {
+    let text = |s: &str| Value::Text(s.into());
+    let base = Snapshot {
+        version: 3,
+        destinations: vec![vec![text("moi"), text("Moi"), text("responsibility"), Value::Integer(10), Value::Null]],
+        captures: vec![],
+        links: vec![],
+        tasks: vec![
+            vec![text("a"), text("Titre SECRET"), text("Texte SECRET"), text("todo")],
+            vec![text("b"), text("B"), text("b"), text("todo")],
+        ],
+    };
+    assert!(compare(&base, &base.clone()).is_empty());
+
+    let mut changed = base.clone();
+    changed.tasks[0][2] = text("Autre texte SECRET");
+    changed.tasks.remove(1);
+    changed.tasks.push(vec![text("c"), text("C"), text("c"), text("todo")]);
+    let divergences = compare(&base, &changed);
+    let fields: Vec<(String, String)> = divergences.iter().map(|d| (d.id.clone(), d.field.clone())).collect();
+    assert!(fields.contains(&("a".into(), "details".into())));
+    assert!(fields.contains(&("b".into(), "ligne absente".into())));
+    assert!(fields.contains(&("c".into(), "ligne inattendue".into())));
+    let shown = describe(&divergences);
+    assert!(shown.starts_with("3 divergence(s)") && !shown.contains("SECRET"), "{shown}");
+
+    // Une différence de version est signalée comme telle.
+    let mut other_version = base.clone();
+    other_version.version = 2;
+    assert_eq!(compare(&base, &other_version)[0].table, "schema");
+}
+
+#[test]
+fn un_schema_incomplet_ou_residuel_est_refuse() {
+    let (_dir, path) = fictitious_v2();
+    let conn = Connection::open(&path).unwrap();
+    assert!(check_schema(&conn, 2).is_ok());
+    assert!(check_schema(&conn, 3).unwrap_err().contains("version de schéma v2"));
+    conn.execute_batch("DROP TRIGGER tasks_origin_is_immutable").unwrap();
+    assert!(check_schema(&conn, 2).unwrap_err().contains("tasks_origin_is_immutable"));
+    conn.execute_batch("CREATE TEMP TABLE residuelle (x)").unwrap();
+    // L'objet manquant est signalé en premier ; une fois restauré, le résidu temporaire l'est aussi.
+    conn.execute_batch(
+        "CREATE TRIGGER tasks_origin_is_immutable BEFORE UPDATE OF id ON tasks BEGIN SELECT 1; END;",
+    )
+    .unwrap();
+    assert!(check_schema(&conn, 2).unwrap_err().contains("temporaire"));
+}
+
+#[test]
+fn la_repetition_v2_v3_ne_depend_d_aucun_chemin_personnel_dans_ses_messages() {
+    let (_dir, path) = fictitious_v2_inconsistent();
+    let outcome = rehearse(&path, PLAN_V2_V3);
+    let error = outcome.result.unwrap_err();
+    assert!(!error.contains(&*path.to_string_lossy()), "{error}");
+    assert!(!error.contains("Destination perdue"), "{error}");
+    assert_fixed_vocabulary(&marker_line(&rehearse(&path, PLAN_V2_V3)));
+}
+
+#[test]
+fn une_etape_obligatoire_manquante_interdit_status_ok() {
+    // Résultat « réussi » et source intacte, mais UNE étape non validée : l'échec est global.
+    let (_dir, path) = fictitious_v2();
+    let good = rehearse(&path, PLAN_V2_V3);
+    assert!(good.stages.all());
+    let report = || good.result.as_ref().unwrap();
+    for missing in 0..6 {
+        let mut stages = good.stages;
+        match missing {
+            0 => stages.integrity = false,
+            1 => stages.schema = false,
+            2 => stages.projection = false,
+            3 => stages.backup = false,
+            4 => stages.round_trip = false,
+            _ => stages.restore = false,
+        }
+        let outcome = Outcome {
+            plan: good.plan,
+            result: Ok(Report {
+                plan: report().plan,
+                version_before: report().version_before,
+                version_after: report().version_after,
+                tables: report().tables.clone(),
+                live_captures: report().live_captures,
+                round_trip: report().round_trip,
+                backup: report().backup.clone(),
+                present: report().present.clone(),
+            }),
+            source: SourceCheck::Unchanged,
+            stages,
+        };
+        let line = marker_line(&outcome);
+        assert!(line.starts_with("REHEARSAL-RESULT status=FAIL"), "étape {missing} : {line}");
+        assert_fixed_vocabulary(&line);
+    }
 }

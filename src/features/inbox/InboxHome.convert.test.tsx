@@ -163,7 +163,8 @@ describe("003-A — création à partir du brouillon", () => {
     expect(task).toMatchObject({
       title: "Vendre la console",
       details: "Console + 2 manettes.\nPrix plancher : 250 €.",
-      destinationId: "finances",
+      sectionId: "finances",
+      responsibilityId: null,
       status: "todo",
       originInboxItemId: item.id,
     });
@@ -195,7 +196,7 @@ describe("003-A — création à partir du brouillon", () => {
       details: "Texte\nsur deux lignes",
       destination: { type: "keep" },
     });
-    expect(backend.state.tasks[0]).toMatchObject({ details: "Texte\nsur deux lignes", destinationId: "moi" });
+    expect(backend.state.tasks[0]).toMatchObject({ details: "Texte\nsur deux lignes", responsibilityId: "moi", sectionId: null });
   });
 
   it("« Aucun » retire le classement de la tâche sans toucher à celui de la capture", async () => {
@@ -206,7 +207,7 @@ describe("003-A — création à partir du brouillon", () => {
     fireEvent.click(createButton());
     await screen.findByText("Transformée en tâche");
     expect(convertCall()).toMatchObject({ destination: { type: "clear" } });
-    expect(backend.state.tasks[0].destinationId).toBeNull();
+    expect(backend.state.tasks[0]).toMatchObject({ responsibilityId: null, sectionId: null });
     expect(backend.find(item.id)!.destinationId).toBe("externe");
   });
 
@@ -338,7 +339,7 @@ describe("003-A — validation et échecs (le brouillon n'est jamais perdu)", ()
     expect(backend.state.tasks[0]).toMatchObject({
       title: "Mon titre précis",
       details: "Ma description longue et précise",
-      destinationId: "administratif",
+      sectionId: "administratif",
     });
   });
 
@@ -360,7 +361,7 @@ describe("003-A — validation et échecs (le brouillon n'est jamais perdu)", ()
     fireEvent.change(destinationSelect(), { target: { value: "moi" } });
     fireEvent.click(createButton());
     await screen.findByText("Transformée en tâche");
-    expect(backend.state.tasks[0].destinationId).toBe("moi");
+    expect(backend.state.tasks[0]).toMatchObject({ responsibilityId: "moi", sectionId: null });
   });
 
   it("une description refusée par Rust (trop longue) est expliquée et conservée", async () => {
@@ -769,7 +770,7 @@ describe("003-A — réponses asynchrones et conflits", () => {
     await screen.findByText("Transformée en tâche");
     expect(backend.state.tasks[0]).toMatchObject({
       details: "Ma réécriture soignée",
-      destinationId: "finances",
+      sectionId: "finances",
     });
     expect(backend.find(item.id)!.content).toBe("Version 2"); // la capture n'est jamais réécrite
   });

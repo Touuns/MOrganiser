@@ -34,13 +34,23 @@ export interface Task {
   id: string;
   title: string;
   /**
-   * Description de la tâche : par défaut le texte intégral de la capture, que l'utilisateur peut
-   * réécrire avant de créer la tâche (la capture, elle, n'est jamais modifiée).
+   * Description de la tâche (facultative : peut être vide). Par défaut le texte intégral de la
+   * capture, que l'utilisateur peut réécrire (la capture, elle, n'est jamais modifiée).
    */
   details: string;
   status: TaskStatus;
-  destinationId: string | null;
-  /** Capture d'origine ; `null` pour une future tâche créée directement. */
+  /** Univers de responsabilité (Moi, Externe), facultatif. */
+  responsibilityId: string | null;
+  /** Rubrique (Administratif, Finances, Inventaire…), facultative. */
+  sectionId: string | null;
+  /** Jours calendaires `AAAA-MM-JJ`, sans heure ni fuseau. */
+  startDate: string | null;
+  dueDate: string | null;
+  /** Date effective de réalisation : préparée en 003-B, utilisée à partir de 003-C. */
+  completedOn: string | null;
+  /** 1 basse, 2 normale, 3 haute ; `null` = non définie (jamais « normale » par défaut). */
+  priority: number | null;
+  /** Capture d'origine ; `null` pour une tâche créée directement. Immuable. */
   originInboxItemId: string | null;
   createdAt: number;
   updatedAt: number;
@@ -160,7 +170,9 @@ export function restoreInboxItem(id: string): Promise<InboxItem> {
 export type DestinationChoice =
   | { type: "keep" }
   | { type: "clear" }
-  | { type: "set"; id: string };
+  | { type: "set"; id: string }
+  /** Univers et rubrique choisis séparément (`null` = aucun). */
+  | { type: "split"; responsibilityId: string | null; sectionId: string | null };
 
 /** Brouillon de tâche (003-A) : tout est facultatif, un champ absent reprend la capture. */
 export interface TaskDraftInput {
@@ -168,6 +180,10 @@ export interface TaskDraftInput {
   details?: string;
   /** Absente = destination de la capture. */
   destination?: DestinationChoice;
+  startDate?: string | null;
+  dueDate?: string | null;
+  /** 1 à 3 ; absente = non définie. */
+  priority?: number | null;
 }
 
 /**
@@ -187,7 +203,35 @@ export function convertInboxItemToTask(
     title,
     details: draft.details,
     destination: draft.destination,
+    startDate: draft.startDate,
+    dueDate: draft.dueDate,
+    priority: draft.priority,
   });
+}
+
+/** Champs éditables d'une tâche (création directe et modification). */
+export interface TaskFields {
+  title: string;
+  /** Facultative : `""` accepté. */
+  details: string;
+  responsibilityId: string | null;
+  sectionId: string | null;
+  startDate: string | null;
+  dueDate: string | null;
+  priority: number | null;
+}
+
+/** Crée une tâche sans capture d'origine (aucune provenance inventée), au statut « à faire ». */
+export function createTask(fields: TaskFields): Promise<Task> {
+  return call("create_task", { fields });
+}
+
+/**
+ * Modifie une tâche active. `expectedUpdatedAt` : la version ouverte (verrou optimiste) ; un
+ * conflit renvoie `task_version_conflict`. Ne modifie jamais le statut ni l'origine.
+ */
+export function updateTask(id: string, expectedUpdatedAt: number, fields: TaskFields): Promise<Task> {
+  return call("update_task", { id, expectedUpdatedAt, fields });
 }
 
 /** Annule la conversion : la capture revient dans la boîte, la tâche est conservée. */
